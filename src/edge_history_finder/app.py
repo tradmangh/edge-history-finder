@@ -9,11 +9,12 @@ from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, QLocale, QSettings, QTimer
 from PySide6.QtGui import QGuiApplication, QAction, QColor, QFont, QPainter, QPixmap
-from PySide6.QtWidgets import QSplashScreen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QStatusBar,
     QDateEdit,
     QFormLayout,
@@ -604,47 +605,40 @@ class MainWindow(QMainWindow):
         self._update_status(result_count=len(rows))
 
 
-def _make_splash() -> QSplashScreen:
-    w, h = 700, 220
-    pm = QPixmap(w, h)
-    pm.fill(QColor("#111827"))
+def _show_splash_dialog() -> None:
+    # Dismissable splash (OK button), as requested.
+    dlg = QDialog()
+    dlg.setWindowTitle(tr("title"))
+    dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    dlg.setModal(True)
 
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
+    lay = QVBoxLayout(dlg)
 
-    p.setPen(QColor("#E5E7EB"))
-    p.setFont(QFont("Segoe UI", 18, QFont.Bold))
-    p.drawText(24, 55, tr("title"))
+    title = QLabel(tr("title"))
+    title.setStyleSheet("font-size: 18px; font-weight: 700;")
+    lay.addWidget(title)
 
-    p.setFont(QFont("Segoe UI", 10))
-    p.setPen(QColor("#9CA3AF"))
-    p.drawText(24, 90, "Written by Thomas Radman")
-    p.drawText(24, 112, "Co-authored by OpenClaw / OpenAI Codex 5.2")
+    lay.addWidget(QLabel("Written by Thomas Radman"))
+    lay.addWidget(QLabel("Co-authored by OpenClaw / OpenAI Codex 5.2"))
 
-    p.setPen(QColor("#6B7280"))
-    p.drawText(24, 155, "Tip: Right-click results to copy / exclude domains.")
-    p.drawText(24, 175, "Privacy: runs locally, reads Edge History SQLite via temp copy.")
+    tip = QLabel("Tip: Right-click results to copy / exclude domains.\nPrivacy: runs locally, reads Edge History SQLite via temp copy.")
+    tip.setStyleSheet("color: #555;")
+    lay.addWidget(tip)
 
-    p.end()
+    bb = QDialogButtonBox(QDialogButtonBox.Ok)
+    bb.accepted.connect(dlg.accept)
+    lay.addWidget(bb)
 
-    splash = QSplashScreen(pm)
-    splash.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-    return splash
+    dlg.exec()
 
 
 def main() -> int:
     app = QApplication(sys.argv)
 
-    splash = _make_splash()
-    splash.show()
-    app.processEvents()
+    _show_splash_dialog()
 
     w = MainWindow()
     w.show()
-
-    # Ensure the splash is visible for at least a short moment.
-    # On fast machines it can otherwise appear to "not show".
-    QTimer.singleShot(900, lambda: splash.finish(w))
 
     return app.exec()
 
