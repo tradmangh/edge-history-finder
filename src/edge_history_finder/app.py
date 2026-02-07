@@ -134,8 +134,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(btns)
 
         # --- Results
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Zeit", "Titel", "URL"])
+        # Columns: time, domain, google query (if any), title, url
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Zeit", "Domain", "Google Query", "Titel", "URL"])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setWordWrap(False)
@@ -177,7 +178,7 @@ class MainWindow(QMainWindow):
         rows = sorted({it.row() for it in self.table.selectedItems()})
         out: List[str] = []
         for r in rows:
-            it = self.table.item(r, 2)
+            it = self.table.item(r, 4)
             if not it:
                 continue
             u = it.text().strip()
@@ -298,8 +299,27 @@ class MainWindow(QMainWindow):
             row_i = self.table.rowCount()
             self.table.insertRow(row_i)
             self.table.setItem(row_i, 0, QTableWidgetItem(r.local_time))
-            self.table.setItem(row_i, 1, QTableWidgetItem(r.title))
-            self.table.setItem(row_i, 2, QTableWidgetItem(r.url))
+
+            domain = ""
+            gq = ""
+            try:
+                u = urlparse(r.url)
+                domain = u.netloc
+                if u.netloc.endswith("google.com") or u.netloc.endswith("google.at"):
+                    if u.path.startswith("/search"):
+                        from urllib.parse import parse_qs
+
+                        qs = parse_qs(u.query)
+                        qv = qs.get("q")
+                        if qv:
+                            gq = qv[0]
+            except Exception:
+                pass
+
+            self.table.setItem(row_i, 1, QTableWidgetItem(domain))
+            self.table.setItem(row_i, 2, QTableWidgetItem(gq))
+            self.table.setItem(row_i, 3, QTableWidgetItem(r.title))
+            self.table.setItem(row_i, 4, QTableWidgetItem(r.url))
 
         if rows:
             self.table.selectRow(0)
