@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List
 from urllib.parse import urlparse
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QGuiApplication, QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -42,6 +42,86 @@ class Settings:
 
 
 class MainWindow(QMainWindow):
+    def _load_settings(self):
+        s = self._qsettings
+        # excludes
+        ex = s.value("excludes", [], list)
+        if isinstance(ex, str):
+            ex = [ex]
+        if ex:
+            self.excludeList.clear()
+            for v in ex:
+                if v and str(v).strip():
+                    self.excludeList.addItem(str(v).strip())
+
+        # typedOnly
+        to = s.value("typedOnly", True)
+        if isinstance(to, str):
+            to = to.lower() in ("1", "true", "yes")
+        self.typedOnly.setChecked(bool(to))
+
+        # weekdays
+        wd = s.value("weekdays", [0,1,2,3,4,5,6], list)
+        if isinstance(wd, str):
+            wd = [int(x) for x in wd.split(",") if x.strip().isdigit()]
+        wd_set = set(int(x) for x in wd)
+        self.wd_sun.setChecked(0 in wd_set)
+        self.wd_mon.setChecked(1 in wd_set)
+        self.wd_tue.setChecked(2 in wd_set)
+        self.wd_wed.setChecked(3 in wd_set)
+        self.wd_thu.setChecked(4 in wd_set)
+        self.wd_fri.setChecked(5 in wd_set)
+        self.wd_sat.setChecked(6 in wd_set)
+
+        # profile index
+        pi = s.value("profileIndex", 0)
+        try:
+            pi = int(pi)
+        except Exception:
+            pi = 0
+        if 0 <= pi < self.profile.count():
+            self.profile.setCurrentIndex(pi)
+
+        # time window
+        st = s.value("timeStart", "12:00")
+        en = s.value("timeEnd", "19:00")
+        try:
+            hh, mm = [int(x) for x in str(st).split(":", 1)]
+            self.timeStart.setTime(time(hh, mm))
+        except Exception:
+            pass
+        try:
+            hh, mm = [int(x) for x in str(en).split(":", 1)]
+            self.timeEnd.setTime(time(hh, mm))
+        except Exception:
+            pass
+
+        # limit
+        lim = s.value("limit", 5000)
+        try:
+            self.limit.setValue(int(lim))
+        except Exception:
+            pass
+
+    def _save_settings(self):
+        s = self._qsettings
+        s.setValue("excludes", self.excludes())
+        s.setValue("typedOnly", bool(self.typedOnly.isChecked()))
+        s.setValue("profileIndex", int(self.profile.currentIndex()))
+        s.setValue("timeStart", self.timeStart.time().toString("HH:mm"))
+        s.setValue("timeEnd", self.timeEnd.time().toString("HH:mm"))
+        s.setValue("limit", int(self.limit.value()))
+        # weekdays mapping 0..6
+        wds: List[int] = []
+        if self.wd_sun.isChecked(): wds.append(0)
+        if self.wd_mon.isChecked(): wds.append(1)
+        if self.wd_tue.isChecked(): wds.append(2)
+        if self.wd_wed.isChecked(): wds.append(3)
+        if self.wd_thu.isChecked(): wds.append(4)
+        if self.wd_fri.isChecked(): wds.append(5)
+        if self.wd_sat.isChecked(): wds.append(6)
+        s.setValue("weekdays", wds)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Edge History Finder")
@@ -105,8 +185,24 @@ class MainWindow(QMainWindow):
 
         self.typedOnly = QCheckBox("Typed only")
         self.typedOnly.setChecked(True)
-        self.typedOnly.stateChanged.connect(lambda _s: self._update_status())
+        self.typedOnly.stateChanged.connect(lambda _s: (self._update_status(), self._save_settings()))
         form.addRow("Mode", self.typedOnly)
+
+        # Weekday filter (SQLite %w: 0=Sun..6=Sat)
+        wd_row = QWidget(); wd_l = QHBoxLayout(wd_row); wd_l.setContentsMargins(0,0,0,0)
+        self.wd_mon = QCheckBox("Mo")
+        self.wd_tue = QCheckBox("Di")
+        self.wd_wed = QCheckBox("Mi")
+        self.wd_thu = QCheckBox("Do")
+        self.wd_fri = QCheckBox("Fr")
+        self.wd_sat = QCheckBox("Sa")
+        self.wd_sun = QCheckBox("So")
+        for cb in [self.wd_mon,self.wd_tue,self.wd_wed,self.wd_thu,self.wd_fri,self.wd_sat,self.wd_sun]:
+            cb.setChecked(True)
+            cb.stateChanged.connect(lambda _s: self._save_settings())
+            wd_l.addWidget(cb)
+        wd_l.addStretch(1)
+        form.addRow("Wochentage", wd_row)
 
         # --- Excludes
         ex_wrap = QWidget()
@@ -155,6 +251,11 @@ class MainWindow(QMainWindow):
         self.excludeList.customContextMenuRequested.connect(self.on_exclude_context_menu)
         self.searchBtn.clicked.connect(self.on_search)
         self.copyBtn.clicked.connect(self.on_copy)
+
+        # persistent settings
+        self._qsettings = QSettings("tradm", "EdgeHistoryFinder")
+        self._load_settings()
+        self._update_status()
         self.table.itemSelectionChanged.connect(self.on_sel_changed)
         self.table.itemDoubleClicked.connect(self.on_double_click)
         self.table.customContextMenuRequested.connect(self.on_table_context_menu)
@@ -177,12 +278,14 @@ class MainWindow(QMainWindow):
             self.excludeList.addItem(t)
         self.excludeInput.clear()
         self._update_status()
+        self._save_settings()
 
     def on_remove_exclude(self):
         for it in self.excludeList.selectedItems():
             row = self.excludeList.row(it)
             self.excludeList.takeItem(row)
         self._update_status()
+        self._save_settings()
 
     def on_exclude_context_menu(self, pos):
         items = self.excludeList.selectedItems()
@@ -198,6 +301,7 @@ class MainWindow(QMainWindow):
         def _clear_all():
             self.excludeList.clear()
             self._update_status()
+            self._save_settings()
         act_clear.triggered.connect(_clear_all)
         menu.addAction(act_clear)
 
@@ -323,6 +427,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid range", "End datetime is before start datetime.")
             return
 
+        # SQLite weekday mapping: 0=Sun..6=Sat
+        weekdays: List[int] = []
+        if self.wd_sun.isChecked(): weekdays.append(0)
+        if self.wd_mon.isChecked(): weekdays.append(1)
+        if self.wd_tue.isChecked(): weekdays.append(2)
+        if self.wd_wed.isChecked(): weekdays.append(3)
+        if self.wd_thu.isChecked(): weekdays.append(4)
+        if self.wd_fri.isChecked(): weekdays.append(5)
+        if self.wd_sat.isChecked(): weekdays.append(6)
+
         try:
             rows = query_history(
                 history_db=history_db,
@@ -331,6 +445,7 @@ class MainWindow(QMainWindow):
                 excludes=self.excludes(),
                 limit=int(self.limit.value()),
                 typed_only=bool(self.typedOnly.isChecked()),
+                weekdays=weekdays,
             )
         except Exception as e:
             QMessageBox.critical(self, "Query failed", str(e))

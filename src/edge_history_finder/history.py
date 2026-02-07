@@ -69,6 +69,7 @@ def query_history(
     excludes: Iterable[str],
     limit: int = 5000,
     typed_only: bool = True,
+    weekdays: list[int] | None = None,
 ) -> List[HistoryRow]:
     db = _copy_history_db(history_db)
 
@@ -77,7 +78,15 @@ def query_history(
 
     exclude_sql = "".join([" AND urls.url NOT LIKE ?" for _ in excludes])
     typed_sql = " AND COALESCE(urls.typed_count, 0) > 0" if typed_only else ""
-    params = [start_ct, end_ct] + [f"%{x}%" for x in excludes] + [limit]
+
+    weekday_sql = ""
+    weekday_params: list[str] = []
+    if weekdays:
+        # SQLite: strftime('%w', ...) => 0=Sun..6=Sat
+        weekday_sql = " AND strftime('%w', datetime(visits.visit_time/1000000-11644473600,'unixepoch','localtime')) IN (" + ",".join(["?"] * len(weekdays)) + ")"
+        weekday_params = [str(int(w)) for w in weekdays]
+
+    params = [start_ct, end_ct] + [f"%{x}%" for x in excludes] + weekday_params + [limit]
 
     sql = f"""
     SELECT
@@ -90,6 +99,7 @@ def query_history(
     WHERE visits.visit_time BETWEEN ? AND ?
       {typed_sql}
       {exclude_sql}
+      {weekday_sql}
     ORDER BY visits.visit_time ASC
     LIMIT ?;
     """
