@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QStatusBar,
     QDateEdit,
     QFormLayout,
     QHBoxLayout,
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
             self.profilePath.setText(str(user_data))
             for p in list_profiles(user_data):
                 self.profile.addItem(p)
+        self.profile.currentIndexChanged.connect(lambda _i: self._update_status())
 
         self.dateStart = QDateEdit()
         self.dateStart.setCalendarPopup(True)
@@ -103,6 +105,7 @@ class MainWindow(QMainWindow):
 
         self.typedOnly = QCheckBox("Typed only")
         self.typedOnly.setChecked(True)
+        self.typedOnly.stateChanged.connect(lambda _s: self._update_status())
         form.addRow("Mode", self.typedOnly)
 
         # --- Excludes
@@ -119,6 +122,7 @@ class MainWindow(QMainWindow):
         form.addRow("Negativfilter", ex_wrap)
 
         self.excludeList = QListWidget()
+        self.excludeList.setContextMenuPolicy(Qt.CustomContextMenu)
         self.excludeList.addItem("google.com")
         self.excludeList.addItem("youtube.com")
         layout.addWidget(self.excludeList)
@@ -146,12 +150,19 @@ class MainWindow(QMainWindow):
 
         # wire
         self.excludeAdd.clicked.connect(self.on_add_exclude)
+        self.excludeInput.returnPressed.connect(self.on_add_exclude)
         self.excludeRemove.clicked.connect(self.on_remove_exclude)
+        self.excludeList.customContextMenuRequested.connect(self.on_exclude_context_menu)
         self.searchBtn.clicked.connect(self.on_search)
         self.copyBtn.clicked.connect(self.on_copy)
         self.table.itemSelectionChanged.connect(self.on_sel_changed)
         self.table.itemDoubleClicked.connect(self.on_double_click)
         self.table.customContextMenuRequested.connect(self.on_table_context_menu)
+
+        # status bar
+        self.status = QStatusBar()
+        self.setStatusBar(self.status)
+        self.status.showMessage("Ready")
 
     def excludes(self) -> List[str]:
         return [self.excludeList.item(i).text().strip() for i in range(self.excludeList.count()) if self.excludeList.item(i).text().strip()]
@@ -165,11 +176,32 @@ class MainWindow(QMainWindow):
         if t not in existing:
             self.excludeList.addItem(t)
         self.excludeInput.clear()
+        self._update_status()
 
     def on_remove_exclude(self):
         for it in self.excludeList.selectedItems():
             row = self.excludeList.row(it)
             self.excludeList.takeItem(row)
+        self._update_status()
+
+    def on_exclude_context_menu(self, pos):
+        items = self.excludeList.selectedItems()
+        menu = QMenu(self)
+
+        act_rm = QAction("Remove selected", self)
+        act_rm.setEnabled(bool(items))
+        act_rm.triggered.connect(self.on_remove_exclude)
+        menu.addAction(act_rm)
+
+        act_clear = QAction("Clear all", self)
+        act_clear.setEnabled(self.excludeList.count() > 0)
+        def _clear_all():
+            self.excludeList.clear()
+            self._update_status()
+        act_clear.triggered.connect(_clear_all)
+        menu.addAction(act_clear)
+
+        menu.exec(self.excludeList.viewport().mapToGlobal(pos))
 
     def on_sel_changed(self):
         self.copyBtn.setEnabled(len(self.table.selectedItems()) > 0)
@@ -259,6 +291,16 @@ class MainWindow(QMainWindow):
 
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
+    def _update_status(self, result_count: int | None = None):
+        typed = "typed-only" if self.typedOnly.isChecked() else "all-visits"
+        ex_n = self.excludeList.count()
+        prof = self.profile.currentText() or "Default"
+        # if result_count is None, keep last known
+        if result_count is not None:
+            self._last_result_count = result_count
+        rc = getattr(self, "_last_result_count", 0)
+        self.status.showMessage(f"Profile: {prof} | Mode: {typed} | Excludes: {ex_n} | Results: {rc}")
+
     def on_search(self):
         user_data = windows_edge_user_data_dir()
         if user_data is None:
@@ -323,6 +365,8 @@ class MainWindow(QMainWindow):
 
         if rows:
             self.table.selectRow(0)
+
+        self._update_status(result_count=len(rows))
 
 
 def main() -> int:
