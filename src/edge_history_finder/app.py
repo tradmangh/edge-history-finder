@@ -641,7 +641,10 @@ def main() -> int:
 
     w = MainWindow()
     w.show()
-    splash.finish(w)
+
+    # Ensure the splash is visible for at least a short moment.
+    # On fast machines it can otherwise appear to "not show".
+    QTimer.singleShot(900, lambda: splash.finish(w))
 
     return app.exec()
 
