@@ -46,8 +46,10 @@ def unix_seconds_to_chrome_time(unix_seconds: float) -> int:
 
 
 def dt_to_chrome_time(d: datetime) -> int:
+    # UI gives naive datetimes (interpreted as local time). Avoid platform-specific tz helpers.
     if d.tzinfo is None:
-        d = d.replace(tzinfo=timezone.localtime())  # best effort
+        local_tz = datetime.now().astimezone().tzinfo
+        d = d.replace(tzinfo=local_tz)
     unix_s = d.timestamp()
     return unix_seconds_to_chrome_time(unix_s)
 
