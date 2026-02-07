@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMenu,
+    QMenuBar,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -373,6 +374,14 @@ class MainWindow(QMainWindow):
 
         # persistent settings
         self._qsettings = QSettings("tradm", "EdgeHistoryFinder")
+
+        # menu
+        mb = self.menuBar()
+        help_menu = mb.addMenu("Hilfe" if _LANG == "de" else "Help")
+        act_about = QAction("Info" if _LANG == "de" else "About", self)
+        act_about.triggered.connect(lambda: _show_about_dialog(self, self._qsettings))
+        help_menu.addAction(act_about)
+
         self._load_settings()
         self._update_status()
         self.table.itemDoubleClicked.connect(self.on_double_click)
@@ -607,11 +616,10 @@ class MainWindow(QMainWindow):
         self._update_status(result_count=len(rows))
 
 
-def _show_splash_dialog(qsettings: QSettings) -> None:
-    # Dismissable splash (OK button) + optional "don't show again".
-    dlg = QDialog()
+def _show_about_dialog(parent, qsettings: QSettings) -> None:
+    # About dialog with optional "don't show splash again".
+    dlg = QDialog(parent)
     dlg.setWindowTitle(tr("title"))
-    dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
     dlg.setModal(True)
 
     lay = QVBoxLayout(dlg)
@@ -628,12 +636,12 @@ def _show_splash_dialog(qsettings: QSettings) -> None:
     lay.addWidget(tip)
 
     cb = QCheckBox(tr("dont_show_again"))
+    cb.setChecked(not bool(qsettings.value("showSplash", True)))
     lay.addWidget(cb)
 
     bb = QDialogButtonBox(QDialogButtonBox.Ok)
     def _accept():
-        if cb.isChecked():
-            qsettings.setValue("showSplash", False)
+        qsettings.setValue("showSplash", not cb.isChecked())
         dlg.accept()
     bb.accepted.connect(_accept)
     lay.addWidget(bb)
@@ -644,14 +652,15 @@ def _show_splash_dialog(qsettings: QSettings) -> None:
 def main() -> int:
     app = QApplication(sys.argv)
 
+    # Show about dialog on first run unless disabled.
     qs = QSettings("tradm", "EdgeHistoryFinder")
     show = qs.value("showSplash", True)
     if isinstance(show, str):
         show = show.lower() in ("1", "true", "yes")
-    if bool(show):
-        _show_splash_dialog(qs)
 
     w = MainWindow()
+    if bool(show):
+        _show_about_dialog(w, qs)
     w.show()
 
     return app.exec()
