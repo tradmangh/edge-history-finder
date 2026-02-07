@@ -78,6 +78,7 @@ _T = {
         "remove_selected": "Remove selected",
         "clear_all": "Clear all",
         "ready": "Ready",
+        "dont_show_again": "Don't show again",
         "edge_not_found": "Edge not found",
         "edge_not_found_msg": "Could not find Edge user data directory via LOCALAPPDATA.",
         "history_not_found": "History not found",
@@ -116,6 +117,7 @@ _T = {
         "remove_selected": "Auswahl entfernen",
         "clear_all": "Alles löschen",
         "ready": "Bereit",
+        "dont_show_again": "Nicht mehr anzeigen",
         "edge_not_found": "Edge nicht gefunden",
         "edge_not_found_msg": "Edge User Data wurde über LOCALAPPDATA nicht gefunden.",
         "history_not_found": "History nicht gefunden",
@@ -605,8 +607,8 @@ class MainWindow(QMainWindow):
         self._update_status(result_count=len(rows))
 
 
-def _show_splash_dialog() -> None:
-    # Dismissable splash (OK button), as requested.
+def _show_splash_dialog(qsettings: QSettings) -> None:
+    # Dismissable splash (OK button) + optional "don't show again".
     dlg = QDialog()
     dlg.setWindowTitle(tr("title"))
     dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
@@ -625,8 +627,15 @@ def _show_splash_dialog() -> None:
     tip.setStyleSheet("color: #555;")
     lay.addWidget(tip)
 
+    cb = QCheckBox(tr("dont_show_again"))
+    lay.addWidget(cb)
+
     bb = QDialogButtonBox(QDialogButtonBox.Ok)
-    bb.accepted.connect(dlg.accept)
+    def _accept():
+        if cb.isChecked():
+            qsettings.setValue("showSplash", False)
+        dlg.accept()
+    bb.accepted.connect(_accept)
     lay.addWidget(bb)
 
     dlg.exec()
@@ -635,7 +644,12 @@ def _show_splash_dialog() -> None:
 def main() -> int:
     app = QApplication(sys.argv)
 
-    _show_splash_dialog()
+    qs = QSettings("tradm", "EdgeHistoryFinder")
+    show = qs.value("showSplash", True)
+    if isinstance(show, str):
+        show = show.lower() in ("1", "true", "yes")
+    if bool(show):
+        _show_splash_dialog(qs)
 
     w = MainWindow()
     w.show()
