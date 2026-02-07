@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security / sensitive issues
+    url: https://github.com/tradmangh/edge-history-finder/security/policy
+    about: Please avoid posting sensitive data publicly.

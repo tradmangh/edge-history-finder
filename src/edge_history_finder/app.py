@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import List
 from urllib.parse import urlparse
 
-from PySide6.QtCore import Qt, QSettings, QTimer
-from PySide6.QtGui import QGuiApplication, QAction
+from PySide6.QtCore import Qt, QLocale, QSettings, QTimer
+from PySide6.QtGui import QGuiApplication, QAction, QColor, QFont, QPainter, QPixmap
+from PySide6.QtWidgets import QSplashScreen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -34,6 +35,107 @@ from PySide6.QtWidgets import (
 )
 
 from .history import query_history, windows_edge_user_data_dir, list_profiles
+
+
+def _lang() -> str:
+    # OS language → 'de' or 'en'
+    try:
+        lang = QLocale.system().language()
+        if lang in (QLocale.German, QLocale.AustrianGerman, QLocale.SwissGerman):
+            return "de"
+    except Exception:
+        pass
+    return "en"
+
+
+_LANG = _lang()
+
+_T = {
+    "en": {
+        "title": "Edge History Finder",
+        "edge_user_data": "Edge User Data",
+        "profile": "Profile",
+        "date": "Date",
+        "time": "Time",
+        "from": "From",
+        "to": "To",
+        "limit": "Limit",
+        "negative_filters": "Negative filters",
+        "exclude_placeholder": "Exclude contains… (e.g. google.com)",
+        "add": "Add",
+        "weekdays": "Weekdays",
+        "mode": "Mode",
+        "typed_only": "Typed only",
+        "search": "Search",
+        "search_tip": "Optional: manual refresh (auto-refresh is enabled)",
+        "copy_urls": "Copy selected URL(s)",
+        "exclude_domains": "Exclude {n} domains",
+        "exclude_domain": "Exclude domain",
+        "exclude_prefixes": "Exclude {n} URL prefixes",
+        "exclude_prefix": "Exclude this URL prefix",
+        "copy_url": "Copy URL",
+        "remove_selected": "Remove selected",
+        "clear_all": "Clear all",
+        "ready": "Ready",
+        "edge_not_found": "Edge not found",
+        "edge_not_found_msg": "Could not find Edge user data directory via LOCALAPPDATA.",
+        "history_not_found": "History not found",
+        "invalid_range": "Invalid range",
+        "invalid_range_msg": "End datetime is before start datetime.",
+        "query_failed": "Query failed",
+        "col_time": "Time",
+        "col_domain": "Domain",
+        "col_gq": "Google Query",
+        "col_title": "Title",
+        "col_url": "URL",
+    },
+    "de": {
+        "title": "Edge History Finder",
+        "edge_user_data": "Edge User Data",
+        "profile": "Profil",
+        "date": "Datum",
+        "time": "Uhrzeit",
+        "from": "Von",
+        "to": "Bis",
+        "limit": "Limit",
+        "negative_filters": "Negativfilter",
+        "exclude_placeholder": "Exclude contains… (z.B. google.com)",
+        "add": "Add",
+        "weekdays": "Wochentage",
+        "mode": "Mode",
+        "typed_only": "Typed only",
+        "search": "Search",
+        "search_tip": "Optional: manuelles Refresh (Auto-Refresh ist aktiv)",
+        "copy_urls": "Copy selected URL(s)",
+        "exclude_domains": "Exclude {n} domains",
+        "exclude_domain": "Exclude domain",
+        "exclude_prefixes": "Exclude {n} URL prefixes",
+        "exclude_prefix": "Exclude this URL prefix",
+        "copy_url": "Copy URL",
+        "remove_selected": "Remove selected",
+        "clear_all": "Clear all",
+        "ready": "Bereit",
+        "edge_not_found": "Edge nicht gefunden",
+        "edge_not_found_msg": "Edge User Data wurde über LOCALAPPDATA nicht gefunden.",
+        "history_not_found": "History nicht gefunden",
+        "invalid_range": "Ungültiger Zeitraum",
+        "invalid_range_msg": "Ende liegt vor Start.",
+        "query_failed": "Query fehlgeschlagen",
+        "col_time": "Zeit",
+        "col_domain": "Domain",
+        "col_gq": "Google Query",
+        "col_title": "Titel",
+        "col_url": "URL",
+    },
+}
+
+
+def tr(key: str, **fmt) -> str:
+    s = _T.get(_LANG, _T["en"]).get(key, _T["en"].get(key, key))
+    try:
+        return s.format(**fmt)
+    except Exception:
+        return s
 
 
 @dataclass
@@ -124,7 +226,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Edge History Finder")
+        self.setWindowTitle(tr("title"))
         self.resize(1050, 700)
 
         root = QWidget()
@@ -173,27 +275,27 @@ class MainWindow(QMainWindow):
         self.timeEnd.timeChanged.connect(lambda _t: self._schedule_refresh())
         self.limit.valueChanged.connect(lambda _v: self._schedule_refresh())
 
-        form.addRow("Edge User Data", self.profilePath)
-        form.addRow("Profil", self.profile)
+        form.addRow(tr("edge_user_data"), self.profilePath)
+        form.addRow(tr("profile"), self.profile)
 
         row_dt = QWidget(); row_dt_l = QHBoxLayout(row_dt); row_dt_l.setContentsMargins(0,0,0,0)
-        row_dt_l.addWidget(QLabel("Von")); row_dt_l.addWidget(self.dateStart)
-        row_dt_l.addWidget(QLabel("Bis")); row_dt_l.addWidget(self.dateEnd)
+        row_dt_l.addWidget(QLabel(tr("from"))); row_dt_l.addWidget(self.dateStart)
+        row_dt_l.addWidget(QLabel(tr("to"))); row_dt_l.addWidget(self.dateEnd)
         row_dt_l.addStretch(1)
-        form.addRow("Datum", row_dt)
+        form.addRow(tr("date"), row_dt)
 
         row_t = QWidget(); row_t_l = QHBoxLayout(row_t); row_t_l.setContentsMargins(0,0,0,0)
-        row_t_l.addWidget(QLabel("Von")); row_t_l.addWidget(self.timeStart)
-        row_t_l.addWidget(QLabel("Bis")); row_t_l.addWidget(self.timeEnd)
+        row_t_l.addWidget(QLabel(tr("from"))); row_t_l.addWidget(self.timeStart)
+        row_t_l.addWidget(QLabel(tr("to"))); row_t_l.addWidget(self.timeEnd)
         row_t_l.addStretch(1)
-        form.addRow("Uhrzeit", row_t)
+        form.addRow(tr("time"), row_t)
 
-        form.addRow("Limit", self.limit)
+        form.addRow(tr("limit"), self.limit)
 
-        self.typedOnly = QCheckBox("Typed only")
+        self.typedOnly = QCheckBox(tr("typed_only"))
         self.typedOnly.setChecked(True)
         self.typedOnly.stateChanged.connect(lambda _s: (self._update_status(), self._save_settings(), self._schedule_refresh()))
-        form.addRow("Mode", self.typedOnly)
+        form.addRow(tr("mode"), self.typedOnly)
 
         # Weekday filter (SQLite %w: 0=Sun..6=Sat)
         wd_row = QWidget(); wd_l = QHBoxLayout(wd_row); wd_l.setContentsMargins(0,0,0,0)
@@ -209,20 +311,20 @@ class MainWindow(QMainWindow):
             cb.stateChanged.connect(lambda _s: (self._save_settings(), self._schedule_refresh()))
             wd_l.addWidget(cb)
         wd_l.addStretch(1)
-        form.addRow("Wochentage", wd_row)
+        form.addRow(tr("weekdays"), wd_row)
 
         # --- Excludes
         ex_wrap = QWidget()
         ex_l = QHBoxLayout(ex_wrap)
         ex_l.setContentsMargins(0,0,0,0)
         self.excludeInput = QLineEdit()
-        self.excludeInput.setPlaceholderText("Exclude contains… (e.g. google.com)")
-        self.excludeAdd = QPushButton("Add")
-        self.excludeRemove = QPushButton("Remove selected")
+        self.excludeInput.setPlaceholderText(tr("exclude_placeholder"))
+        self.excludeAdd = QPushButton(tr("add"))
+        self.excludeRemove = QPushButton(tr("remove_selected"))
         ex_l.addWidget(self.excludeInput)
         ex_l.addWidget(self.excludeAdd)
         ex_l.addWidget(self.excludeRemove)
-        form.addRow("Negativfilter", ex_wrap)
+        form.addRow(tr("negative_filters"), ex_wrap)
 
         self.excludeList = QListWidget()
         self.excludeList.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -232,8 +334,8 @@ class MainWindow(QMainWindow):
 
         # --- Action buttons
         btns = QWidget(); btns_l = QHBoxLayout(btns); btns_l.setContentsMargins(0,0,0,0)
-        self.searchBtn = QPushButton("Search")
-        self.searchBtn.setToolTip("Optional: manual refresh (auto-refresh is enabled)")
+        self.searchBtn = QPushButton(tr("search"))
+        self.searchBtn.setToolTip(tr("search_tip"))
         btns_l.addWidget(self.searchBtn)
         btns_l.addStretch(1)
         layout.addWidget(btns)
@@ -241,7 +343,7 @@ class MainWindow(QMainWindow):
         # --- Results
         # Columns: time, domain, google query (if any), title, url
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Zeit", "Domain", "Google Query", "Titel", "URL"])
+        self.table.setHorizontalHeaderLabels([tr("col_time"), tr("col_domain"), tr("col_gq"), tr("col_title"), tr("col_url")])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setWordWrap(False)
@@ -264,7 +366,7 @@ class MainWindow(QMainWindow):
         # status bar (must exist before _update_status)
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.status.showMessage("Ready")
+        self.status.showMessage(tr("ready"))
 
         # persistent settings
         self._qsettings = QSettings("tradm", "EdgeHistoryFinder")
@@ -307,12 +409,12 @@ class MainWindow(QMainWindow):
         items = self.excludeList.selectedItems()
         menu = QMenu(self)
 
-        act_rm = QAction("Remove selected", self)
+        act_rm = QAction(tr("remove_selected"), self)
         act_rm.setEnabled(bool(items))
         act_rm.triggered.connect(self.on_remove_exclude)
         menu.addAction(act_rm)
 
-        act_clear = QAction("Clear all", self)
+        act_clear = QAction(tr("clear_all"), self)
         act_clear.setEnabled(self.excludeList.count() > 0)
         def _clear_all():
             self.excludeList.clear()
@@ -374,7 +476,7 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
 
-        act_copy = QAction("Copy selected URL(s)", self)
+        act_copy = QAction(tr("copy_urls"), self)
         act_copy.triggered.connect(self.on_copy)
         menu.addAction(act_copy)
 
@@ -389,7 +491,7 @@ class MainWindow(QMainWindow):
                 hosts.append(host)
         hosts = sorted(set(hosts))
         if hosts:
-            label = "Exclude domain" if len(hosts) == 1 else f"Exclude {len(hosts)} domains"
+            label = tr("exclude_domain") if len(hosts) == 1 else tr("exclude_domains", n=len(hosts))
             act_ex_domains = QAction(label, self)
             act_ex_domains.triggered.connect(lambda: self._add_exclude_values(hosts))
             menu.addAction(act_ex_domains)
@@ -406,7 +508,7 @@ class MainWindow(QMainWindow):
                 prefixes.append(prefix)
         prefixes = sorted(set(prefixes))
         if prefixes:
-            label = "Exclude this URL prefix" if len(prefixes) == 1 else f"Exclude {len(prefixes)} URL prefixes"
+            label = tr("exclude_prefix") if len(prefixes) == 1 else tr("exclude_prefixes", n=len(prefixes))
             act_ex_prefixes = QAction(label, self)
             act_ex_prefixes.triggered.connect(lambda: self._add_exclude_values(prefixes))
             menu.addAction(act_ex_prefixes)
@@ -426,12 +528,12 @@ class MainWindow(QMainWindow):
     def on_search(self):
         user_data = windows_edge_user_data_dir()
         if user_data is None:
-            QMessageBox.warning(self, "Edge not found", "Could not find Edge user data directory via LOCALAPPDATA.")
+            QMessageBox.warning(self, tr("edge_not_found"), tr("edge_not_found_msg"))
             return
         profile = self.profile.currentText() or "Default"
         history_db = Path(user_data) / profile / "History"
         if not history_db.exists():
-            QMessageBox.warning(self, "History not found", f"History DB not found: {history_db}")
+            QMessageBox.warning(self, tr("history_not_found"), f"History DB not found: {history_db}")
             return
 
         ds = self.dateStart.date().toPython()
@@ -442,7 +544,7 @@ class MainWindow(QMainWindow):
         start_dt = datetime.combine(ds, ts)
         end_dt = datetime.combine(de, te)
         if end_dt < start_dt:
-            QMessageBox.warning(self, "Invalid range", "End datetime is before start datetime.")
+            QMessageBox.warning(self, tr("invalid_range"), tr("invalid_range_msg"))
             return
 
         # SQLite weekday mapping: 0=Sun..6=Sat
@@ -466,7 +568,7 @@ class MainWindow(QMainWindow):
                 weekdays=weekdays,
             )
         except Exception as e:
-            QMessageBox.critical(self, "Query failed", str(e))
+            QMessageBox.critical(self, tr("query_failed"), str(e))
             return
 
         self.table.setRowCount(0)
@@ -502,10 +604,45 @@ class MainWindow(QMainWindow):
         self._update_status(result_count=len(rows))
 
 
+def _make_splash() -> QSplashScreen:
+    w, h = 700, 220
+    pm = QPixmap(w, h)
+    pm.fill(QColor("#111827"))
+
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+
+    p.setPen(QColor("#E5E7EB"))
+    p.setFont(QFont("Segoe UI", 18, QFont.Bold))
+    p.drawText(24, 55, tr("title"))
+
+    p.setFont(QFont("Segoe UI", 10))
+    p.setPen(QColor("#9CA3AF"))
+    p.drawText(24, 90, "Written by Thomas Radman")
+    p.drawText(24, 112, "Co-authored by OpenClaw / OpenAI Codex 5.2")
+
+    p.setPen(QColor("#6B7280"))
+    p.drawText(24, 155, "Tip: Right-click results to copy / exclude domains.")
+    p.drawText(24, 175, "Privacy: runs locally, reads Edge History SQLite via temp copy.")
+
+    p.end()
+
+    splash = QSplashScreen(pm)
+    splash.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    return splash
+
+
 def main() -> int:
     app = QApplication(sys.argv)
+
+    splash = _make_splash()
+    splash.show()
+    app.processEvents()
+
     w = MainWindow()
     w.show()
+    splash.finish(w)
+
     return app.exec()
 
 
