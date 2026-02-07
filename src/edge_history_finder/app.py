@@ -252,6 +252,11 @@ class MainWindow(QMainWindow):
         self.searchBtn.clicked.connect(self.on_search)
         self.copyBtn.clicked.connect(self.on_copy)
 
+        # status bar (must exist before _update_status)
+        self.status = QStatusBar()
+        self.setStatusBar(self.status)
+        self.status.showMessage("Ready")
+
         # persistent settings
         self._qsettings = QSettings("tradm", "EdgeHistoryFinder")
         self._load_settings()
@@ -260,10 +265,7 @@ class MainWindow(QMainWindow):
         self.table.itemDoubleClicked.connect(self.on_double_click)
         self.table.customContextMenuRequested.connect(self.on_table_context_menu)
 
-        # status bar
-        self.status = QStatusBar()
-        self.setStatusBar(self.status)
-        self.status.showMessage("Ready")
+        # status bar (initialized earlier)
 
     def excludes(self) -> List[str]:
         return [self.excludeList.item(i).text().strip() for i in range(self.excludeList.count()) if self.excludeList.item(i).text().strip()]
