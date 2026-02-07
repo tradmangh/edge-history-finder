@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QAction
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDateEdit,
     QFormLayout,
@@ -31,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .history import query_typed_urls, windows_edge_user_data_dir, list_profiles
+from .history import query_history, windows_edge_user_data_dir, list_profiles
 
 
 @dataclass
@@ -100,6 +101,10 @@ class MainWindow(QMainWindow):
 
         form.addRow("Limit", self.limit)
 
+        self.typedOnly = QCheckBox("Typed only")
+        self.typedOnly.setChecked(True)
+        form.addRow("Mode", self.typedOnly)
+
         # --- Excludes
         ex_wrap = QWidget()
         ex_l = QHBoxLayout(ex_wrap)
@@ -132,7 +137,7 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Zeit", "Titel", "URL"])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setWordWrap(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -168,21 +173,28 @@ class MainWindow(QMainWindow):
     def on_sel_changed(self):
         self.copyBtn.setEnabled(len(self.table.selectedItems()) > 0)
 
+    def _selected_urls(self) -> List[str]:
+        rows = sorted({it.row() for it in self.table.selectedItems()})
+        out: List[str] = []
+        for r in rows:
+            it = self.table.item(r, 2)
+            if not it:
+                continue
+            u = it.text().strip()
+            if u:
+                out.append(u)
+        return out
+
     def _current_url(self) -> str | None:
-        row = self.table.currentRow()
-        if row < 0:
-            return None
-        url_item = self.table.item(row, 2)
-        if not url_item:
-            return None
-        url = url_item.text().strip()
-        return url or None
+        urls = self._selected_urls()
+        return urls[0] if urls else None
 
     def on_copy(self):
-        url = self._current_url()
-        if not url:
+        urls = self._selected_urls()
+        if not urls:
             return
-        QGuiApplication.clipboard().setText(url)
+        # If multiple rows selected, copy as newline-separated list.
+        QGuiApplication.clipboard().setText("\n".join(urls))
 
     def on_double_click(self, _item):
         # Doppelklick = URL kopieren
@@ -196,38 +208,53 @@ class MainWindow(QMainWindow):
         if value not in existing:
             self.excludeList.addItem(value)
 
+    def _add_exclude_values(self, values: List[str]):
+        for v in values:
+            self._add_exclude_value(v)
+
     def on_table_context_menu(self, pos):
-        url = self._current_url()
-        if not url:
+        urls = self._selected_urls()
+        if not urls:
             return
 
         menu = QMenu(self)
 
-        act_copy = QAction("Copy URL", self)
+        act_copy = QAction("Copy selected URL(s)", self)
         act_copy.triggered.connect(self.on_copy)
         menu.addAction(act_copy)
 
-        # Domain exclude
-        try:
-            host = urlparse(url).netloc
-        except Exception:
-            host = ""
-        if host:
-            act_ex_domain = QAction(f"Exclude domain: {host}", self)
-            act_ex_domain.triggered.connect(lambda: self._add_exclude_value(host))
-            menu.addAction(act_ex_domain)
+        # Exclude domains of selected
+        hosts: List[str] = []
+        for u in urls:
+            try:
+                host = urlparse(u).netloc
+            except Exception:
+                host = ""
+            if host:
+                hosts.append(host)
+        hosts = sorted(set(hosts))
+        if hosts:
+            label = "Exclude domain" if len(hosts) == 1 else f"Exclude {len(hosts)} domains"
+            act_ex_domains = QAction(label, self)
+            act_ex_domains.triggered.connect(lambda: self._add_exclude_values(hosts))
+            menu.addAction(act_ex_domains)
 
-        # Simple pattern exclude (scheme+host+path prefix)
-        # Useful for filtering a whole site section.
-        try:
-            u = urlparse(url)
-            prefix = f"{u.scheme}://{u.netloc}{u.path}"
-        except Exception:
-            prefix = ""
-        if prefix:
-            act_ex_prefix = QAction("Exclude this URL prefix", self)
-            act_ex_prefix.triggered.connect(lambda: self._add_exclude_value(prefix))
-            menu.addAction(act_ex_prefix)
+        # Exclude URL prefixes of selected
+        prefixes: List[str] = []
+        for u in urls:
+            try:
+                p = urlparse(u)
+                prefix = f"{p.scheme}://{p.netloc}{p.path}"
+            except Exception:
+                prefix = ""
+            if prefix:
+                prefixes.append(prefix)
+        prefixes = sorted(set(prefixes))
+        if prefixes:
+            label = "Exclude this URL prefix" if len(prefixes) == 1 else f"Exclude {len(prefixes)} URL prefixes"
+            act_ex_prefixes = QAction(label, self)
+            act_ex_prefixes.triggered.connect(lambda: self._add_exclude_values(prefixes))
+            menu.addAction(act_ex_prefixes)
 
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
@@ -254,12 +281,13 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            rows = query_typed_urls(
+            rows = query_history(
                 history_db=history_db,
                 start_dt=start_dt,
                 end_dt=end_dt,
                 excludes=self.excludes(),
                 limit=int(self.limit.value()),
+                typed_only=bool(self.typedOnly.isChecked()),
             )
         except Exception as e:
             QMessageBox.critical(self, "Query failed", str(e))

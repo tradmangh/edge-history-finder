@@ -62,12 +62,13 @@ def _copy_history_db(src: Path) -> Path:
     return dst
 
 
-def query_typed_urls(
+def query_history(
     history_db: Path,
     start_dt: datetime,
     end_dt: datetime,
     excludes: Iterable[str],
     limit: int = 5000,
+    typed_only: bool = True,
 ) -> List[HistoryRow]:
     db = _copy_history_db(history_db)
 
@@ -75,6 +76,7 @@ def query_typed_urls(
     end_ct = dt_to_chrome_time(end_dt)
 
     exclude_sql = "".join([" AND urls.url NOT LIKE ?" for _ in excludes])
+    typed_sql = " AND COALESCE(urls.typed_count, 0) > 0" if typed_only else ""
     params = [start_ct, end_ct] + [f"%{x}%" for x in excludes] + [limit]
 
     sql = f"""
@@ -86,7 +88,7 @@ def query_typed_urls(
     FROM urls
     JOIN visits ON visits.url = urls.id
     WHERE visits.visit_time BETWEEN ? AND ?
-      AND COALESCE(urls.typed_count, 0) > 0
+      {typed_sql}
       {exclude_sql}
     ORDER BY visits.visit_time ASC
     LIMIT ?;
