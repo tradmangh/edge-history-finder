@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List
 from urllib.parse import urlparse
 
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt, QSettings, QTimer
 from PySide6.QtGui import QGuiApplication, QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -147,7 +147,7 @@ class MainWindow(QMainWindow):
             self.profilePath.setText(str(user_data))
             for p in list_profiles(user_data):
                 self.profile.addItem(p)
-        self.profile.currentIndexChanged.connect(lambda _i: self._update_status())
+        self.profile.currentIndexChanged.connect(lambda _i: (self._update_status(), self._save_settings(), self._schedule_refresh()))
 
         self.dateStart = QDateEdit()
         self.dateStart.setCalendarPopup(True)
@@ -165,6 +165,13 @@ class MainWindow(QMainWindow):
         self.limit = QSpinBox()
         self.limit.setRange(1, 50000)
         self.limit.setValue(5000)
+
+        # auto-refresh triggers
+        self.dateStart.dateChanged.connect(lambda _d: self._schedule_refresh())
+        self.dateEnd.dateChanged.connect(lambda _d: self._schedule_refresh())
+        self.timeStart.timeChanged.connect(lambda _t: self._schedule_refresh())
+        self.timeEnd.timeChanged.connect(lambda _t: self._schedule_refresh())
+        self.limit.valueChanged.connect(lambda _v: self._schedule_refresh())
 
         form.addRow("Edge User Data", self.profilePath)
         form.addRow("Profil", self.profile)
@@ -185,7 +192,7 @@ class MainWindow(QMainWindow):
 
         self.typedOnly = QCheckBox("Typed only")
         self.typedOnly.setChecked(True)
-        self.typedOnly.stateChanged.connect(lambda _s: (self._update_status(), self._save_settings()))
+        self.typedOnly.stateChanged.connect(lambda _s: (self._update_status(), self._save_settings(), self._schedule_refresh()))
         form.addRow("Mode", self.typedOnly)
 
         # Weekday filter (SQLite %w: 0=Sun..6=Sat)
@@ -199,7 +206,7 @@ class MainWindow(QMainWindow):
         self.wd_sun = QCheckBox("So")
         for cb in [self.wd_mon,self.wd_tue,self.wd_wed,self.wd_thu,self.wd_fri,self.wd_sat,self.wd_sun]:
             cb.setChecked(True)
-            cb.stateChanged.connect(lambda _s: self._save_settings())
+            cb.stateChanged.connect(lambda _s: (self._save_settings(), self._schedule_refresh()))
             wd_l.addWidget(cb)
         wd_l.addStretch(1)
         form.addRow("Wochentage", wd_row)
@@ -225,11 +232,9 @@ class MainWindow(QMainWindow):
 
         # --- Action buttons
         btns = QWidget(); btns_l = QHBoxLayout(btns); btns_l.setContentsMargins(0,0,0,0)
-        self.searchBtn = QPushButton("Search typed URLs")
-        self.copyBtn = QPushButton("Copy selected URL")
-        self.copyBtn.setEnabled(False)
+        self.searchBtn = QPushButton("Search")
+        self.searchBtn.setToolTip("Optional: manual refresh (auto-refresh is enabled)")
         btns_l.addWidget(self.searchBtn)
-        btns_l.addWidget(self.copyBtn)
         btns_l.addStretch(1)
         layout.addWidget(btns)
 
@@ -245,12 +250,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.table, 1)
 
         # wire
+        # debounce auto-refresh
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.timeout.connect(self.on_search)
+
         self.excludeAdd.clicked.connect(self.on_add_exclude)
         self.excludeInput.returnPressed.connect(self.on_add_exclude)
         self.excludeRemove.clicked.connect(self.on_remove_exclude)
         self.excludeList.customContextMenuRequested.connect(self.on_exclude_context_menu)
         self.searchBtn.clicked.connect(self.on_search)
-        self.copyBtn.clicked.connect(self.on_copy)
 
         # status bar (must exist before _update_status)
         self.status = QStatusBar()
@@ -261,7 +270,6 @@ class MainWindow(QMainWindow):
         self._qsettings = QSettings("tradm", "EdgeHistoryFinder")
         self._load_settings()
         self._update_status()
-        self.table.itemSelectionChanged.connect(self.on_sel_changed)
         self.table.itemDoubleClicked.connect(self.on_double_click)
         self.table.customContextMenuRequested.connect(self.on_table_context_menu)
 
@@ -269,6 +277,10 @@ class MainWindow(QMainWindow):
 
     def excludes(self) -> List[str]:
         return [self.excludeList.item(i).text().strip() for i in range(self.excludeList.count()) if self.excludeList.item(i).text().strip()]
+
+    def _schedule_refresh(self):
+        # Debounced auto-refresh to avoid hammering SQLite while typing/clicking.
+        self._refresh_timer.start(250)
 
     def on_add_exclude(self):
         t = self.excludeInput.text().strip()
@@ -281,6 +293,7 @@ class MainWindow(QMainWindow):
         self.excludeInput.clear()
         self._update_status()
         self._save_settings()
+        self._schedule_refresh()
 
     def on_remove_exclude(self):
         for it in self.excludeList.selectedItems():
@@ -288,6 +301,7 @@ class MainWindow(QMainWindow):
             self.excludeList.takeItem(row)
         self._update_status()
         self._save_settings()
+        self._schedule_refresh()
 
     def on_exclude_context_menu(self, pos):
         items = self.excludeList.selectedItems()
@@ -304,13 +318,15 @@ class MainWindow(QMainWindow):
             self.excludeList.clear()
             self._update_status()
             self._save_settings()
+            self._schedule_refresh()
         act_clear.triggered.connect(_clear_all)
         menu.addAction(act_clear)
 
         menu.exec(self.excludeList.viewport().mapToGlobal(pos))
 
+    # selection changed: nothing to do (copy happens via context menu / double-click)
     def on_sel_changed(self):
-        self.copyBtn.setEnabled(len(self.table.selectedItems()) > 0)
+        return
 
     def _selected_urls(self) -> List[str]:
         rows = sorted({it.row() for it in self.table.selectedItems()})
