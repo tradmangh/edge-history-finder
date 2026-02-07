@@ -282,3 +282,7 @@ def main() -> int:
     w = MainWindow()
     w.show()
     return app.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
