@@ -1,0 +1,225 @@
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass
+from datetime import datetime, time
+from pathlib import Path
+from typing import List
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QDateEdit,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QTimeEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .history import query_typed_urls, windows_edge_user_data_dir, list_profiles
+
+
+@dataclass
+class Settings:
+    excludes: List[str]
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Edge History Finder")
+        self.resize(1050, 700)
+
+        root = QWidget()
+        self.setCentralWidget(root)
+        layout = QVBoxLayout(root)
+
+        # --- Controls
+        controls = QWidget()
+        form = QFormLayout(controls)
+        layout.addWidget(controls)
+
+        self.profile = QComboBox()
+        self.profilePath = QLineEdit()
+        self.profilePath.setReadOnly(True)
+
+        user_data = windows_edge_user_data_dir()
+        if user_data is None:
+            self.profilePath.setPlaceholderText("Windows Edge User Data not found. Set path manually later.")
+        else:
+            self.profilePath.setText(str(user_data))
+            for p in list_profiles(user_data):
+                self.profile.addItem(p)
+
+        self.dateStart = QDateEdit()
+        self.dateStart.setCalendarPopup(True)
+        self.dateStart.setDate(datetime.now().date())
+
+        self.dateEnd = QDateEdit()
+        self.dateEnd.setCalendarPopup(True)
+        self.dateEnd.setDate(datetime.now().date())
+
+        self.timeStart = QTimeEdit()
+        self.timeStart.setTime(time(12, 0))
+        self.timeEnd = QTimeEdit()
+        self.timeEnd.setTime(time(19, 0))
+
+        self.limit = QSpinBox()
+        self.limit.setRange(1, 50000)
+        self.limit.setValue(5000)
+
+        form.addRow("Edge User Data", self.profilePath)
+        form.addRow("Profil", self.profile)
+
+        row_dt = QWidget(); row_dt_l = QHBoxLayout(row_dt); row_dt_l.setContentsMargins(0,0,0,0)
+        row_dt_l.addWidget(QLabel("Von")); row_dt_l.addWidget(self.dateStart)
+        row_dt_l.addWidget(QLabel("Bis")); row_dt_l.addWidget(self.dateEnd)
+        row_dt_l.addStretch(1)
+        form.addRow("Datum", row_dt)
+
+        row_t = QWidget(); row_t_l = QHBoxLayout(row_t); row_t_l.setContentsMargins(0,0,0,0)
+        row_t_l.addWidget(QLabel("Von")); row_t_l.addWidget(self.timeStart)
+        row_t_l.addWidget(QLabel("Bis")); row_t_l.addWidget(self.timeEnd)
+        row_t_l.addStretch(1)
+        form.addRow("Uhrzeit", row_t)
+
+        form.addRow("Limit", self.limit)
+
+        # --- Excludes
+        ex_wrap = QWidget()
+        ex_l = QHBoxLayout(ex_wrap)
+        ex_l.setContentsMargins(0,0,0,0)
+        self.excludeInput = QLineEdit()
+        self.excludeInput.setPlaceholderText("Exclude contains… (e.g. google.com)")
+        self.excludeAdd = QPushButton("Add")
+        self.excludeRemove = QPushButton("Remove selected")
+        ex_l.addWidget(self.excludeInput)
+        ex_l.addWidget(self.excludeAdd)
+        ex_l.addWidget(self.excludeRemove)
+        form.addRow("Negativfilter", ex_wrap)
+
+        self.excludeList = QListWidget()
+        self.excludeList.addItem("google.com")
+        self.excludeList.addItem("youtube.com")
+        layout.addWidget(self.excludeList)
+
+        # --- Action buttons
+        btns = QWidget(); btns_l = QHBoxLayout(btns); btns_l.setContentsMargins(0,0,0,0)
+        self.searchBtn = QPushButton("Search typed URLs")
+        self.copyBtn = QPushButton("Copy selected URL")
+        self.copyBtn.setEnabled(False)
+        btns_l.addWidget(self.searchBtn)
+        btns_l.addWidget(self.copyBtn)
+        btns_l.addStretch(1)
+        layout.addWidget(btns)
+
+        # --- Results
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Zeit", "Titel", "URL"])
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setWordWrap(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.table, 1)
+
+        # wire
+        self.excludeAdd.clicked.connect(self.on_add_exclude)
+        self.excludeRemove.clicked.connect(self.on_remove_exclude)
+        self.searchBtn.clicked.connect(self.on_search)
+        self.copyBtn.clicked.connect(self.on_copy)
+        self.table.itemSelectionChanged.connect(self.on_sel_changed)
+
+    def excludes(self) -> List[str]:
+        return [self.excludeList.item(i).text().strip() for i in range(self.excludeList.count()) if self.excludeList.item(i).text().strip()]
+
+    def on_add_exclude(self):
+        t = self.excludeInput.text().strip()
+        if not t:
+            return
+        # avoid dups
+        existing = set(self.excludes())
+        if t not in existing:
+            self.excludeList.addItem(t)
+        self.excludeInput.clear()
+
+    def on_remove_exclude(self):
+        for it in self.excludeList.selectedItems():
+            row = self.excludeList.row(it)
+            self.excludeList.takeItem(row)
+
+    def on_sel_changed(self):
+        self.copyBtn.setEnabled(len(self.table.selectedItems()) > 0)
+
+    def on_copy(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        url_item = self.table.item(row, 2)
+        if not url_item:
+            return
+        QGuiApplication.clipboard().setText(url_item.text())
+
+    def on_search(self):
+        user_data = windows_edge_user_data_dir()
+        if user_data is None:
+            QMessageBox.warning(self, "Edge not found", "Could not find Edge user data directory via LOCALAPPDATA.")
+            return
+        profile = self.profile.currentText() or "Default"
+        history_db = Path(user_data) / profile / "History"
+        if not history_db.exists():
+            QMessageBox.warning(self, "History not found", f"History DB not found: {history_db}")
+            return
+
+        ds = self.dateStart.date().toPython()
+        de = self.dateEnd.date().toPython()
+        ts = self.timeStart.time().toPython()
+        te = self.timeEnd.time().toPython()
+
+        start_dt = datetime.combine(ds, ts)
+        end_dt = datetime.combine(de, te)
+        if end_dt < start_dt:
+            QMessageBox.warning(self, "Invalid range", "End datetime is before start datetime.")
+            return
+
+        try:
+            rows = query_typed_urls(
+                history_db=history_db,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                excludes=self.excludes(),
+                limit=int(self.limit.value()),
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Query failed", str(e))
+            return
+
+        self.table.setRowCount(0)
+        for r in rows:
+            row_i = self.table.rowCount()
+            self.table.insertRow(row_i)
+            self.table.setItem(row_i, 0, QTableWidgetItem(r.local_time))
+            self.table.setItem(row_i, 1, QTableWidgetItem(r.title))
+            self.table.setItem(row_i, 2, QTableWidgetItem(r.url))
+
+        if rows:
+            self.table.selectRow(0)
+
+
+def main() -> int:
+    app = QApplication(sys.argv)
+    w = MainWindow()
+    w.show()
+    return app.exec()
