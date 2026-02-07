@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
 from typing import List
+from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QAction
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -133,6 +135,7 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setWordWrap(False)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         layout.addWidget(self.table, 1)
 
         # wire
@@ -141,6 +144,8 @@ class MainWindow(QMainWindow):
         self.searchBtn.clicked.connect(self.on_search)
         self.copyBtn.clicked.connect(self.on_copy)
         self.table.itemSelectionChanged.connect(self.on_sel_changed)
+        self.table.itemDoubleClicked.connect(self.on_double_click)
+        self.table.customContextMenuRequested.connect(self.on_table_context_menu)
 
     def excludes(self) -> List[str]:
         return [self.excludeList.item(i).text().strip() for i in range(self.excludeList.count()) if self.excludeList.item(i).text().strip()]
@@ -163,14 +168,68 @@ class MainWindow(QMainWindow):
     def on_sel_changed(self):
         self.copyBtn.setEnabled(len(self.table.selectedItems()) > 0)
 
-    def on_copy(self):
+    def _current_url(self) -> str | None:
         row = self.table.currentRow()
         if row < 0:
-            return
+            return None
         url_item = self.table.item(row, 2)
         if not url_item:
+            return None
+        url = url_item.text().strip()
+        return url or None
+
+    def on_copy(self):
+        url = self._current_url()
+        if not url:
             return
-        QGuiApplication.clipboard().setText(url_item.text())
+        QGuiApplication.clipboard().setText(url)
+
+    def on_double_click(self, _item):
+        # Doppelklick = URL kopieren
+        self.on_copy()
+
+    def _add_exclude_value(self, value: str):
+        value = value.strip()
+        if not value:
+            return
+        existing = set(self.excludes())
+        if value not in existing:
+            self.excludeList.addItem(value)
+
+    def on_table_context_menu(self, pos):
+        url = self._current_url()
+        if not url:
+            return
+
+        menu = QMenu(self)
+
+        act_copy = QAction("Copy URL", self)
+        act_copy.triggered.connect(self.on_copy)
+        menu.addAction(act_copy)
+
+        # Domain exclude
+        try:
+            host = urlparse(url).netloc
+        except Exception:
+            host = ""
+        if host:
+            act_ex_domain = QAction(f"Exclude domain: {host}", self)
+            act_ex_domain.triggered.connect(lambda: self._add_exclude_value(host))
+            menu.addAction(act_ex_domain)
+
+        # Simple pattern exclude (scheme+host+path prefix)
+        # Useful for filtering a whole site section.
+        try:
+            u = urlparse(url)
+            prefix = f"{u.scheme}://{u.netloc}{u.path}"
+        except Exception:
+            prefix = ""
+        if prefix:
+            act_ex_prefix = QAction("Exclude this URL prefix", self)
+            act_ex_prefix.triggered.connect(lambda: self._add_exclude_value(prefix))
+            menu.addAction(act_ex_prefix)
+
+        menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def on_search(self):
         user_data = windows_edge_user_data_dir()
