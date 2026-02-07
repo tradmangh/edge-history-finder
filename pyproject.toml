@@ -2,7 +2,7 @@
 name = "edge-history-finder"
 version = "0.1.0"
 description = "Local UI tool to search Microsoft Edge history by date/time window, profiles, and negative filters; typed URLs only."
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

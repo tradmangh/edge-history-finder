@@ -23,8 +23,14 @@ pip install -r requirements.txt
 python -m edge_history_finder
 ```
 
-## Build portable (Windows)
-Planned: PyInstaller one-file exe.
+## Build portable (Windows EXE)
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+.\build.ps1
+# output: dist\EdgeHistoryFinder.exe
+```
 
 ---
 Tom’s workflow: pick date range + time window, add exclude filters, copy the 1–2 URLs you’re hunting.
