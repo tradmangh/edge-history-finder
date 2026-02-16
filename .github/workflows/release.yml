@@ -1,0 +1,121 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Extract version from pyproject.toml
+        id: get_version
+        shell: pwsh
+        run: |
+          $content = Get-Content pyproject.toml
+          $version = ($content | Select-String -Pattern 'version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "Version: $version"
+      
+      - name: Build executable with PyInstaller
+        shell: pwsh
+        run: |
+          .\build.ps1
+      
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          if (Test-Path "dist\EdgeHistoryFinder.exe") {
+            Write-Host "✓ EdgeHistoryFinder.exe built successfully"
+            $size = (Get-Item "dist\EdgeHistoryFinder.exe").Length / 1MB
+            Write-Host "Size: $([math]::Round($size, 2)) MB"
+          } else {
+            Write-Error "Build failed - executable not found"
+            exit 1
+          }
+      
+      - name: Check if release exists
+        id: check_release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ steps.get_version.outputs.VERSION }}"
+          $releases = gh release list --json tagName,isPrerelease --jq '.[] | select(.isPrerelease == false) | .tagName'
+          if ($releases -contains "v$version") {
+            echo "RELEASE_EXISTS=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Release v$version already exists"
+          } else {
+            echo "RELEASE_EXISTS=false" >> $env:GITHUB_OUTPUT
+            Write-Host "Release v$version does not exist"
+          }
+      
+      - name: Create GitHub Release
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $version = "${{ steps.get_version.outputs.VERSION }}"
+          $tag = "v$version"
+          
+          # Generate release notes
+          $notes = @"
+          ## Edge History Finder v$version
+          
+          ### Features
+          - **History Search**: Find lost URLs by time window with exclusion filters
+          - **Closed Tabs Finder**: Recover tab groups via URL clustering
+          
+          ### Download
+          - Windows: EdgeHistoryFinder.exe (standalone executable)
+          
+          ### Privacy & Security
+          - Runs 100% locally - no network calls
+          - Read-only access to Edge history
+          - No telemetry or tracking
+          
+          ### Installation
+          Download and run EdgeHistoryFinder.exe - no installation required.
+          
+          ---
+          
+          **System design**: Thomas Radman  
+          **Code generation**: OpenClaw & opencode (OpenAI GPT 5.2 Codex & Anthropic Sonnet 4.5)
+          "@
+          
+          # Create release with executable
+          gh release create $tag `
+            dist/EdgeHistoryFinder.exe `
+            --title "Edge History Finder v$version" `
+            --notes $notes
+          
+          Write-Host "✓ Release v$version created successfully"
+      
+      - name: Upload artifact (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: EdgeHistoryFinder-v${{ steps.get_version.outputs.VERSION }}
+          path: dist/EdgeHistoryFinder.exe
+          retention-days: 90

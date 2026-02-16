@@ -1,61 +1,132 @@
 # Edge History Finder
 
-Find lost URLs in your Microsoft Edge history when you only remember **rough time** and want to search by **exclusion**.
+**Two powerful tools for Microsoft Edge browser history:**
+
+1. **History Search** - Find lost URLs by time window with smart exclusion filters
+2. **Closed Tabs Finder** - Recover groups of tabs that were closed together
 
 ```
-┌───────────────────────────────┐
-│  Edge History Finder          │
-│  time window + excludes       │
-│  → narrow down to the odd URLs│
-└───────────────────────────────┘
+┌────────────────────────────────────────────┐
+│  Edge History Finder                       │
+│  ✓ Time window + exclusion filters         │
+│  ✓ Tab group recovery via clustering       │
+│  → Find that lost URL or restore tab groups│
+└────────────────────────────────────────────┘
 ```
 
-## Why this exists
-Sometimes you don’t remember the site name, the day, or even whether it was a URL or a search. You *do* remember roughly **12:00–19:00** and you want to eliminate the usual suspects (`google.com`, `youtube.com`, …) until only the interesting URLs remain.
+## Why This Exists
+
+**Problem**: You closed a tab or tab group and can't remember the exact URL or site name.
+
+**Solution**: 
+- **History Search**: Remember it was around **12:00–19:00**? Exclude common sites (`google.com`, `youtube.com`) to narrow down to the interesting URLs.
+- **Closed Tabs Finder**: Recover entire tab groups by detecting clusters of URLs visited within seconds of each other.
 
 ## Features
-- Multiple Edge profiles (**Default**, **Profile 1**, **Profile 2**, …)
-- Date range + time window filtering
-- **Typed-only toggle** (Chromium `urls.typed_count > 0`) *or* show all visits
-- Negative filter list (exclude domains / strings)
+
+### History Search Tab
+- Multiple Edge profiles support (**Default**, **Profile 1**, **Profile 2**, …)
+- Date range + time window filtering (e.g., 12:00–19:00)
+- **Typed-only toggle** - Show only URLs you actually typed (Chromium `urls.typed_count > 0`)
+- **Negative filters** - Exclude domains/patterns (e.g., `google.com`, `youtube.com`)
+- **Weekday filter** - Search only specific days of the week
 - Results table with:
-  - **Domain** column
-  - **Google Query** column for `google.* /search?q=...`
-- Multi-select:
-  - copy selected URL(s)
-  - exclude selected domains / URL prefixes via context menu
-- Weekday filter
+  - Local timestamp
+  - Domain extraction
+  - **Google Query** extraction for `google.*/search?q=...`
+  - Full title and URL
+- **Context menu** on results:
+  - Copy selected URL(s)
+  - Exclude selected domains
+  - Exclude URL prefixes
 - Settings persistence (filters, profile, time window)
-- UI auto-refresh (debounced)
+- Auto-refresh on filter changes (debounced 250ms)
 
-## Privacy & safety
-- Runs locally.
-- Reads Edge `History` SQLite DB by copying it to a temp file (Edge may lock the DB).
-- No network calls.
+### Closed Tabs Finder Tab
+- **Collapsible tab groups** with URL counts
+- **Configurable clustering**:
+  - Minimum URLs per group (default: 10)
+  - Time window in seconds (default: 60)
+- **URL deduplication** (on by default) with `{deduped}/{total}` counts
+- **Sorting options**: Date/Time (default) or Alphabetical
+- Auto-refresh when settings change
 
-## Install (dev)
+## Privacy & Safety
+
+- ✅ **100% local** - Runs entirely on your machine
+- ✅ **No network calls** - Never sends data anywhere
+- ✅ **Read-only** - Copies Edge `History` SQLite DB to temp file (Edge locks the original)
+- ✅ **No tracking** - No telemetry, analytics, or logging
+
+## Installation
+
+### Option 1: Run from source (Development)
 ```powershell
-# Windows (recommended)
+# Windows (Python 3.10+)
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python -m edge_history_finder
 ```
 
-## Build a portable Windows EXE
+### Option 2: Build portable Windows EXE
 ```powershell
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 .\build.ps1
-# output: dist\EdgeHistoryFinder.exe
+# Output: dist\EdgeHistoryFinder.exe
 ```
 
+## Usage
+
+### Finding a Lost URL
+1. Switch to **History** tab
+2. Set date range and time window
+3. Add exclusions (e.g., `google.com`, `youtube.com`)
+4. Optionally enable **Typed only** to filter URLs you directly typed
+5. Optionally filter by weekday
+6. Browse results - auto-refreshes as you adjust filters
+7. Right-click to copy URLs or add more exclusions
+
+### Recovering Closed Tab Groups
+1. Switch to **Closed Tabs Finder** tab
+2. Adjust date range (default: last 60 days)
+3. Fine-tune clustering:
+   - **Min URLs**: Minimum tabs to form a group (default: 10)
+   - **Window (sec)**: Max seconds between tabs (default: 60)
+4. Toggle **Deduplicate URLs** to remove duplicates
+5. Choose sorting: **Date/Time** or **Alphabetical**
+6. Click groups to expand/collapse URLs
+
+## Bug Reports & Feature Requests
+
+Found a bug or have a feature idea? [Open an issue on GitHub](https://github.com/tradmangh/edge-history-finder/issues/new/choose).
+
 ## Credits
-Written by **Thomas Radman**.
-Co-authored by **OpenClaw / OpenAI Codex 5.2**.
+
+**System design and intent**: Thomas Radman  
+**Code generation**: OpenClaw & opencode using OpenAI GPT 5.2 Codex & Anthropic Sonnet 4.5
 
 ## License
-MIT — see [LICENSE](./LICENSE).
+
+**Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)**
+
+- ✅ **Share** - Copy and redistribute
+- ✅ **Adapt** - Remix, transform, and build upon the material
+- ❌ **No Commercial Use** - Not for commercial purposes
+- ⚠️ **Attribution Required** - Must credit the original source
+- ⚠️ **ShareAlike** - Derivatives must use the same license
+
+See [LICENSE](./LICENSE) for full terms.
+
+## Technical Details
+
+- **Language**: Python 3.10+
+- **GUI Framework**: PySide6 (Qt)
+- **Database**: Edge/Chromium SQLite History DB
+- **Packaging**: PyInstaller for Windows EXE
+- **Architecture**: Single-file modular structure (`app.py` + `history.py`)
 
 ## Keywords
-Edge history, Chromium History SQLite, typed URLs, negative filter, exclude domains, find lost URL, google search query.
+
+Edge history, Chromium History SQLite, typed URLs, negative filter, exclude domains, find lost URL, google search query, tab group recovery, closed tabs finder, browser history search
