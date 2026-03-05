@@ -18,6 +18,12 @@ class HistoryRow:
     typed_count: int
 
 
+@dataclass
+class TabGroup:
+    timestamp: str
+    urls: List[str]
+
+
 def windows_edge_user_data_dir() -> Optional[Path]:
     # On Windows: %LOCALAPPDATA%\Microsoft\Edge\User Data
     local = os.environ.get("LOCALAPPDATA")
@@ -83,10 +89,16 @@ def query_history(
     weekday_params: list[str] = []
     if weekdays:
         # SQLite: strftime('%w', ...) => 0=Sun..6=Sat
-        weekday_sql = " AND strftime('%w', datetime(visits.visit_time/1000000-11644473600,'unixepoch','localtime')) IN (" + ",".join(["?"] * len(weekdays)) + ")"
+        weekday_sql = (
+            " AND strftime('%w', datetime(visits.visit_time/1000000-11644473600,'unixepoch','localtime')) IN ("
+            + ",".join(["?"] * len(weekdays))
+            + ")"
+        )
         weekday_params = [str(int(w)) for w in weekdays]
 
-    params = [start_ct, end_ct] + [f"%{x}%" for x in excludes] + weekday_params + [limit]
+    params = (
+        [start_ct, end_ct] + [f"%{x}%" for x in excludes] + weekday_params + [limit]
+    )
 
     sql = f"""
     SELECT
@@ -113,6 +125,85 @@ def query_history(
         con.close()
 
     out: List[HistoryRow] = []
-    for (local_time, url, title, typed_count) in rows:
+    for local_time, url, title, typed_count in rows:
         out.append(HistoryRow(str(local_time), str(url), str(title), int(typed_count)))
     return out
+
+
+def find_tab_groups(
+    history_db: Path,
+    start_dt: datetime,
+    end_dt: datetime,
+    min_urls: int = 10,
+    window_seconds: int = 60,
+) -> List[TabGroup]:
+    """Find clusters of URLs that were likely restored together as a tab group."""
+    db = _copy_history_db(history_db)
+
+    start_ct = dt_to_chrome_time(start_dt)
+    end_ct = dt_to_chrome_time(end_dt)
+
+    # Query all visits in range, no filters
+    sql = """
+    SELECT
+      datetime(visits.visit_time/1000000-11644473600,'unixepoch','localtime') AS local_time,
+      urls.url AS url
+    FROM urls
+    JOIN visits ON visits.url = urls.id
+    WHERE visits.visit_time BETWEEN ? AND ?
+    ORDER BY visits.visit_time ASC;
+    """
+
+    con = sqlite3.connect(str(db))
+    try:
+        cur = con.cursor()
+        cur.execute(sql, (start_ct, end_ct))
+        rows = cur.fetchall()
+    finally:
+        con.close()
+
+    if not rows:
+        return []
+
+    # Sliding window clustering
+    clusters: List[List[tuple[str, str]]] = []  # [(timestamp, url), ...]
+    current_cluster: List[tuple[str, str]] = []
+
+    for local_time, url in rows:
+        ts = str(local_time)
+        if not current_cluster:
+            current_cluster.append((ts, str(url)))
+            continue
+
+        # Get last timestamp in current cluster
+        last_ts = current_cluster[-1][0]
+
+        # Parse both timestamps to compare
+        # Format: "2026-02-13 14:30:00"
+        dt_current = datetime.strptime(last_ts, "%Y-%m-%d %H:%M:%S")
+        dt_new = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+
+        delta = (dt_new - dt_current).total_seconds()
+
+        if delta <= window_seconds:
+            # Within window, add to cluster
+            current_cluster.append((ts, str(url)))
+        else:
+            # Gap too large, finalize current cluster
+            if len(current_cluster) > min_urls:
+                clusters.append(current_cluster)
+            current_cluster = [(ts, str(url))]
+
+    # Don't forget last cluster
+    if len(current_cluster) > min_urls:
+        clusters.append(current_cluster)
+
+    # Convert to TabGroup list, sorted by timestamp DESC
+    result: List[TabGroup] = []
+    for cluster in clusters:
+        first_ts = cluster[0][0]
+        urls = [url for (_ts, url) in cluster]
+        result.append(TabGroup(timestamp=first_ts, urls=urls))
+
+    result.sort(key=lambda g: g.timestamp, reverse=True)
+    return result
