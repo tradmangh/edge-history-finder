@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 
 python -m PyInstaller --noconfirm --clean --onefile --windowed `
   --name EdgeHistoryFinder `
-  -m edge_history_finder
+  --paths src `
+  src/edge_history_finder/__main__.py
 
 Write-Host "Built: dist/EdgeHistoryFinder.exe"
