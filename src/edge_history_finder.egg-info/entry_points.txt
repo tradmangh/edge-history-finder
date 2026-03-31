@@ -1,2 +1,0 @@
-[console_scripts]
-edge-history-finder = edge_history_finder.__main__:main

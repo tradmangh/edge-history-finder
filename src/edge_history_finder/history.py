@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional
 
 
 @dataclass
@@ -21,11 +21,11 @@ class HistoryRow:
 @dataclass
 class TabGroup:
     timestamp: str
-    urls: List[str]
+    urls: list[str]
 
 
-def windows_edge_user_data_dir() -> Optional[Path]:
-    # On Windows: %LOCALAPPDATA%\Microsoft\Edge\User Data
+def windows_edge_user_data_dir() -> Path | None:
+    """Return the Edge User Data directory, or None if not found."""
     local = os.environ.get("LOCALAPPDATA")
     if not local:
         return None
@@ -33,17 +33,37 @@ def windows_edge_user_data_dir() -> Optional[Path]:
     return p if p.exists() else None
 
 
-def list_profiles(user_data_dir: Path) -> List[str]:
-    # Common profile dirs: Default, Profile 1, Profile 2, ...
-    out: List[str] = []
-    for name in ["Default"] + [f"Profile {i}" for i in range(1, 30)]:
-        if (user_data_dir / name / "History").exists():
-            out.append(name)
+def list_profiles(user_data_dir: Path) -> list[str]:
+    """Scan for Edge profile dirs that contain a History file.
+
+    Scans the directory rather than iterating a hardcoded range, so profiles
+    beyond 'Profile 29' are discovered automatically.
+    """
+    out: list[str] = []
+    try:
+        for candidate in user_data_dir.iterdir():
+            if not candidate.is_dir():
+                continue
+            if candidate.name == "Default" or re.fullmatch(
+                r"Profile \d+", candidate.name
+            ):
+                if (candidate / "History").exists():
+                    out.append(candidate.name)
+    except OSError:
+        return []
+
+    def _sort_key(name: str) -> tuple[int, int]:
+        if name == "Default":
+            return (0, 0)
+        m = re.fullmatch(r"Profile (\d+)", name)
+        return (1, int(m.group(1))) if m else (2, 0)
+
+    out.sort(key=_sort_key)
     return out
 
 
 def chrome_time_to_unix_seconds(chrome_us: int) -> float:
-    # Chrome/Edge: microseconds since 1601-01-01 UTC
+    """Convert a Chrome/Edge microsecond timestamp (epoch 1601-01-01 UTC) to Unix seconds."""
     return (chrome_us / 1_000_000) - 11644473600
 
 
@@ -52,31 +72,44 @@ def unix_seconds_to_chrome_time(unix_seconds: float) -> int:
 
 
 def dt_to_chrome_time(d: datetime) -> int:
-    # UI gives naive datetimes (interpreted as local time). Avoid platform-specific tz helpers.
+    """Convert a (possibly naive, local-time) datetime to a Chrome microsecond timestamp."""
     if d.tzinfo is None:
         local_tz = datetime.now().astimezone().tzinfo
         d = d.replace(tzinfo=local_tz)
-    unix_s = d.timestamp()
-    return unix_seconds_to_chrome_time(unix_s)
+    return unix_seconds_to_chrome_time(d.timestamp())
 
 
 def _copy_history_db(src: Path) -> Path:
-    # Copy to temp file to avoid locking issues.
+    """Copy the History DB to a private temp dir to avoid SQLite lock contention.
+
+    Cleans up the temp dir automatically if the copy fails, so callers never
+    need to worry about leaked directories on error.
+    """
     tmp_dir = Path(tempfile.mkdtemp(prefix="edge-history-finder-"))
     dst = tmp_dir / "History.sqlite"
-    shutil.copy2(src, dst)
+    try:
+        shutil.copy2(src, dst)
+    except Exception:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
     return dst
+
+
+def _remove_temp_db(db: Path) -> None:
+    """Delete the temp directory created by _copy_history_db."""
+    shutil.rmtree(db.parent, ignore_errors=True)
 
 
 def query_history(
     history_db: Path,
     start_dt: datetime,
     end_dt: datetime,
-    excludes: Iterable[str],
+    excludes: list[str],
     limit: int = 5000,
     typed_only: bool = True,
     weekdays: list[int] | None = None,
-) -> List[HistoryRow]:
+) -> list[HistoryRow]:
+    excludes = list(excludes)  # materialise once — caller may pass any iterable
     db = _copy_history_db(history_db)
 
     start_ct = dt_to_chrome_time(start_dt)
@@ -88,7 +121,7 @@ def query_history(
     weekday_sql = ""
     weekday_params: list[str] = []
     if weekdays:
-        # SQLite: strftime('%w', ...) => 0=Sun..6=Sat
+        # SQLite strftime('%w'): 0=Sun..6=Sat
         weekday_sql = (
             " AND strftime('%w', datetime(visits.visit_time/1000000-11644473600,'unixepoch','localtime')) IN ("
             + ",".join(["?"] * len(weekdays))
@@ -96,7 +129,7 @@ def query_history(
         )
         weekday_params = [str(int(w)) for w in weekdays]
 
-    params = (
+    params: list = (
         [start_ct, end_ct] + [f"%{x}%" for x in excludes] + weekday_params + [limit]
     )
 
@@ -123,11 +156,12 @@ def query_history(
         rows = cur.fetchall()
     finally:
         con.close()
+        _remove_temp_db(db)
 
-    out: List[HistoryRow] = []
-    for local_time, url, title, typed_count in rows:
-        out.append(HistoryRow(str(local_time), str(url), str(title), int(typed_count)))
-    return out
+    return [
+        HistoryRow(str(local_time), str(url), str(title), int(typed_count))
+        for local_time, url, title, typed_count in rows
+    ]
 
 
 def find_tab_groups(
@@ -136,22 +170,23 @@ def find_tab_groups(
     end_dt: datetime,
     min_urls: int = 10,
     window_seconds: int = 60,
-) -> List[TabGroup]:
+) -> list[TabGroup]:
     """Find clusters of URLs that were likely restored together as a tab group."""
     db = _copy_history_db(history_db)
 
     start_ct = dt_to_chrome_time(start_dt)
     end_ct = dt_to_chrome_time(end_dt)
 
-    # Query all visits in range, no filters
+    # LIMIT guards against huge date ranges causing UI freezes.
     sql = """
     SELECT
-      datetime(visits.visit_time/1000000-11644473600,'unixepoch','localtime') AS local_time,
+      visits.visit_time AS visit_time,
       urls.url AS url
     FROM urls
     JOIN visits ON visits.url = urls.id
     WHERE visits.visit_time BETWEEN ? AND ?
-    ORDER BY visits.visit_time ASC;
+    ORDER BY visits.visit_time ASC
+    LIMIT 100000;
     """
 
     con = sqlite3.connect(str(db))
@@ -161,49 +196,38 @@ def find_tab_groups(
         rows = cur.fetchall()
     finally:
         con.close()
+        _remove_temp_db(db)
 
     if not rows:
         return []
 
-    # Sliding window clustering
-    clusters: List[List[tuple[str, str]]] = []  # [(timestamp, url), ...]
-    current_cluster: List[tuple[str, str]] = []
+    # Sliding-window clustering on raw microsecond visit_time integers —
+    # avoids per-row datetime parsing overhead.
+    clusters: list[list[tuple[int, str]]] = []
+    current_cluster: list[tuple[int, str]] = []
+    window_us = window_seconds * 1_000_000
 
-    for local_time, url in rows:
-        ts = str(local_time)
+    for visit_time, url in rows:
+        vt = int(visit_time)
         if not current_cluster:
-            current_cluster.append((ts, str(url)))
+            current_cluster.append((vt, str(url)))
             continue
 
-        # Get last timestamp in current cluster
-        last_ts = current_cluster[-1][0]
-
-        # Parse both timestamps to compare
-        # Format: "2026-02-13 14:30:00"
-        dt_current = datetime.strptime(last_ts, "%Y-%m-%d %H:%M:%S")
-        dt_new = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-
-        delta = (dt_new - dt_current).total_seconds()
-
-        if delta <= window_seconds:
-            # Within window, add to cluster
-            current_cluster.append((ts, str(url)))
+        if vt - current_cluster[-1][0] <= window_us:
+            current_cluster.append((vt, str(url)))
         else:
-            # Gap too large, finalize current cluster
-            if len(current_cluster) > min_urls:
+            if len(current_cluster) >= min_urls:
                 clusters.append(current_cluster)
-            current_cluster = [(ts, str(url))]
+            current_cluster = [(vt, str(url))]
 
-    # Don't forget last cluster
-    if len(current_cluster) > min_urls:
+    if len(current_cluster) >= min_urls:
         clusters.append(current_cluster)
 
-    # Convert to TabGroup list, sorted by timestamp DESC
-    result: List[TabGroup] = []
+    result: list[TabGroup] = []
     for cluster in clusters:
-        first_ts = cluster[0][0]
-        urls = [url for (_ts, url) in cluster]
-        result.append(TabGroup(timestamp=first_ts, urls=urls))
+        unix_s = chrome_time_to_unix_seconds(cluster[0][0])
+        ts = datetime.fromtimestamp(unix_s).strftime("%Y-%m-%d %H:%M:%S")
+        result.append(TabGroup(timestamp=ts, urls=[url for _, url in cluster]))
 
     result.sort(key=lambda g: g.timestamp, reverse=True)
     return result

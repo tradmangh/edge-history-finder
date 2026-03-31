@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: edge-history-finder
-Version: 0.1.0
-Summary: Local UI tool to search Microsoft Edge history by date/time window, profiles, and negative filters; typed URLs only.
-Requires-Python: >=3.10
-License-File: LICENSE
-Dynamic: license-file
