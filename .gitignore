@@ -4,3 +4,5 @@ __pycache__/
 dist/
 build/
 *.spec
+*.egg-info/
+.bg-shell/

@@ -1,36 +1,38 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
+from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import List
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from PySide6.QtCore import Qt, QLocale, QSettings, QTimer
-from PySide6.QtGui import QGuiApplication, QAction, QColor, QFont, QPainter, QPixmap
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QGuiApplication,
+    QKeySequence,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QFrame,
-    QStatusBar,
     QDateEdit,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMenu,
-    QMenuBar,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QSpinBox,
+    QStatusBar,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -42,11 +44,15 @@ from PySide6.QtWidgets import (
 )
 
 from .history import (
+    find_tab_groups,
+    list_profiles,
     query_history,
     windows_edge_user_data_dir,
-    list_profiles,
-    find_tab_groups,
 )
+
+# tgSortBy combo indices — using constants avoids fragile currentIndex() == 1 checks
+_SORT_DATETIME = 0
+_SORT_ALPHA = 1
 
 
 def _lang() -> str:
@@ -76,6 +82,13 @@ _T = {
         "exclude_placeholder": "Exclude contains… (e.g. google.com)",
         "add": "Add",
         "weekdays": "Weekdays",
+        "wd_mon": "Mon",
+        "wd_tue": "Tue",
+        "wd_wed": "Wed",
+        "wd_thu": "Thu",
+        "wd_fri": "Fri",
+        "wd_sat": "Sat",
+        "wd_sun": "Sun",
         "mode": "Mode",
         "typed_only": "Typed only",
         "search": "Search",
@@ -106,16 +119,22 @@ _T = {
         "tab_groups_urls": "{n} URLs",
         "history": "History",
         "ClosedTabsFinder": "Closed Tabs Finder",
+        "min_urls_label": "Min URLs:",
+        "window_sec_label": "Window (sec):",
+        "deduplicate": "Deduplicate URLs",
+        "sort_by": "Sort by:",
+        "sort_datetime": "Date/Time (default)",
+        "sort_alpha": "Alphabetical",
+        "no_tab_groups": "No tab groups found",
+        "tab_groups_header": "Tab Groups (click to expand)",
+        "help_menu": "Help",
+        "about_action": "About",
     },
     "de": {
         "title": "Edge History Finder",
         "edge_user_data": "Edge-Benutzerdaten",
         "profile": "Profil",
         "date": "Datum",
-        "tab_groups": "Tab-Gruppen",
-        "search": "Suche",
-        "tab_groups_btn": "Tab-Gruppen finden",
-        "tab_groups_urls": "{n} URLs",
         "time": "Uhrzeit",
         "from": "Von",
         "to": "Bis",
@@ -124,6 +143,13 @@ _T = {
         "exclude_placeholder": "Ausschließen (enthält)… (z.B. google.com)",
         "add": "Hinzufügen",
         "weekdays": "Wochentage",
+        "wd_mon": "Mo",
+        "wd_tue": "Di",
+        "wd_wed": "Mi",
+        "wd_thu": "Do",
+        "wd_fri": "Fr",
+        "wd_sat": "Sa",
+        "wd_sun": "So",
         "mode": "Modus",
         "typed_only": "Nur getippt",
         "search": "Suchen",
@@ -149,8 +175,21 @@ _T = {
         "col_gq": "Google-Suchbegriff",
         "col_title": "Titel",
         "col_url": "URL",
+        "tab_groups": "Tab-Gruppen",
+        "tab_groups_btn": "Tab-Gruppen finden",
+        "tab_groups_urls": "{n} URLs",
         "history": "Chronik",
         "ClosedTabsFinder": "Geschlossene Tabs Finder",
+        "min_urls_label": "Min. URLs:",
+        "window_sec_label": "Fenster (Sek.):",
+        "deduplicate": "URLs deduplizieren",
+        "sort_by": "Sortieren nach:",
+        "sort_datetime": "Datum/Uhrzeit (Standard)",
+        "sort_alpha": "Alphabetisch",
+        "no_tab_groups": "Keine Tab-Gruppen gefunden",
+        "tab_groups_header": "Tab-Gruppen (klicken zum Aufklappen)",
+        "help_menu": "Hilfe",
+        "about_action": "Info",
     },
 }
 
@@ -163,14 +202,10 @@ def tr(key: str, **fmt) -> str:
         return s
 
 
-@dataclass
-class Settings:
-    excludes: List[str]
-
-
 class MainWindow(QMainWindow):
     def _load_settings(self):
         s = self._qsettings
+
         # excludes
         ex = s.value("excludes", [], list)
         if isinstance(ex, str):
@@ -210,18 +245,16 @@ class MainWindow(QMainWindow):
             self.profile.setCurrentIndex(pi)
 
         # time window
-        st = s.value("timeStart", "12:00")
-        en = s.value("timeEnd", "19:00")
-        try:
-            hh, mm = [int(x) for x in str(st).split(":", 1)]
-            self.timeStart.setTime(time(hh, mm))
-        except Exception:
-            pass
-        try:
-            hh, mm = [int(x) for x in str(en).split(":", 1)]
-            self.timeEnd.setTime(time(hh, mm))
-        except Exception:
-            pass
+        for attr, key, default in [
+            ("timeStart", "timeStart", "12:00"),
+            ("timeEnd", "timeEnd", "19:00"),
+        ]:
+            val = s.value(key, default)
+            try:
+                hh, mm = [int(x) for x in str(val).split(":", 1)]
+                getattr(self, attr).setTime(time(hh, mm))
+            except Exception:
+                pass
 
         # limit
         lim = s.value("limit", 5000)
@@ -238,22 +271,20 @@ class MainWindow(QMainWindow):
         s.setValue("timeStart", self.timeStart.time().toString("HH:mm"))
         s.setValue("timeEnd", self.timeEnd.time().toString("HH:mm"))
         s.setValue("limit", int(self.limit.value()))
-        # weekdays mapping 0..6
-        wds: List[int] = []
-        if self.wd_sun.isChecked():
-            wds.append(0)
-        if self.wd_mon.isChecked():
-            wds.append(1)
-        if self.wd_tue.isChecked():
-            wds.append(2)
-        if self.wd_wed.isChecked():
-            wds.append(3)
-        if self.wd_thu.isChecked():
-            wds.append(4)
-        if self.wd_fri.isChecked():
-            wds.append(5)
-        if self.wd_sat.isChecked():
-            wds.append(6)
+        wds: list[int] = []
+        for bit, cb in enumerate(
+            [
+                self.wd_sun,
+                self.wd_mon,
+                self.wd_tue,
+                self.wd_wed,
+                self.wd_thu,
+                self.wd_fri,
+                self.wd_sat,
+            ]
+        ):
+            if cb.isChecked():
+                wds.append(bit)
         s.setValue("weekdays", wds)
 
     def __init__(self):
@@ -261,19 +292,23 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(tr("title"))
         self.resize(1050, 700)
 
+        # Cached once at startup — avoids repeated filesystem hits on every query.
+        # Restart the app if Edge is installed/moved while it is running.
+        self._user_data_dir: Path | None = windows_edge_user_data_dir()
+        self._last_result_count: int = 0
+
         root = QWidget()
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
 
-        # --- Create tab widget at top level
+        # ── Tab widget ──────────────────────────────────────────────────────────
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
 
-        # --- Tab 1: History tab
+        # ── Tab 1: History ──────────────────────────────────────────────────────
         tab_history = QWidget()
         tab_history_layout = QVBoxLayout(tab_history)
 
-        # --- Controls for History tab
         controls = QWidget()
         form = QFormLayout(controls)
         tab_history_layout.addWidget(controls)
@@ -282,15 +317,15 @@ class MainWindow(QMainWindow):
         self.profilePath = QLineEdit()
         self.profilePath.setReadOnly(True)
 
-        user_data = windows_edge_user_data_dir()
-        if user_data is None:
+        if self._user_data_dir is None:
             self.profilePath.setPlaceholderText(
                 "Windows Edge User Data not found. Set path manually later."
             )
         else:
-            self.profilePath.setText(str(user_data))
-            for p in list_profiles(user_data):
+            self.profilePath.setText(str(self._user_data_dir))
+            for p in list_profiles(self._user_data_dir):
                 self.profile.addItem(p)
+
         self.profile.currentIndexChanged.connect(
             lambda _i: (
                 self._update_status(),
@@ -316,7 +351,6 @@ class MainWindow(QMainWindow):
         self.limit.setRange(1, 50000)
         self.limit.setValue(5000)
 
-        # auto-refresh triggers
         self.dateStart.dateChanged.connect(lambda _d: self._schedule_refresh())
         self.dateEnd.dateChanged.connect(lambda _d: self._schedule_refresh())
         self.timeStart.timeChanged.connect(lambda _t: self._schedule_refresh())
@@ -359,17 +393,17 @@ class MainWindow(QMainWindow):
         )
         form.addRow(tr("mode"), self.typedOnly)
 
-        # Weekday filter (SQLite %w: 0=Sun..6=Sat)
+        # Weekday filter (SQLite %w: 0=Sun … 6=Sat)
         wd_row = QWidget()
         wd_l = QHBoxLayout(wd_row)
         wd_l.setContentsMargins(0, 0, 0, 0)
-        self.wd_mon = QCheckBox("Mo")
-        self.wd_tue = QCheckBox("Di")
-        self.wd_wed = QCheckBox("Mi")
-        self.wd_thu = QCheckBox("Do")
-        self.wd_fri = QCheckBox("Fr")
-        self.wd_sat = QCheckBox("Sa")
-        self.wd_sun = QCheckBox("So")
+        self.wd_mon = QCheckBox(tr("wd_mon"))
+        self.wd_tue = QCheckBox(tr("wd_tue"))
+        self.wd_wed = QCheckBox(tr("wd_wed"))
+        self.wd_thu = QCheckBox(tr("wd_thu"))
+        self.wd_fri = QCheckBox(tr("wd_fri"))
+        self.wd_sat = QCheckBox(tr("wd_sat"))
+        self.wd_sun = QCheckBox(tr("wd_sun"))
         for cb in [
             self.wd_mon,
             self.wd_tue,
@@ -387,7 +421,7 @@ class MainWindow(QMainWindow):
         wd_l.addStretch(1)
         form.addRow(tr("weekdays"), wd_row)
 
-        # --- Excludes
+        # Excludes
         ex_wrap = QWidget()
         ex_l = QHBoxLayout(ex_wrap)
         ex_l.setContentsMargins(0, 0, 0, 0)
@@ -406,7 +440,6 @@ class MainWindow(QMainWindow):
         self.excludeList.addItem("youtube.com")
         tab_history_layout.addWidget(self.excludeList)
 
-        # --- Action buttons
         btns = QWidget()
         btns_l = QHBoxLayout(btns)
         btns_l.setContentsMargins(0, 0, 0, 0)
@@ -416,8 +449,7 @@ class MainWindow(QMainWindow):
         btns_l.addStretch(1)
         tab_history_layout.addWidget(btns)
 
-        # --- Results table
-        # Columns: time, domain, google query (if any), title, url
+        # Results table: Time | Domain | Google Query | Title | URL
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             [
@@ -435,29 +467,29 @@ class MainWindow(QMainWindow):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         tab_history_layout.addWidget(self.table, 1)
 
-        # Add History tab
+        # Ctrl+C copies selected URL(s) from the results table
+        QShortcut(QKeySequence.StandardKey.Copy, self.table).activated.connect(
+            self.on_copy
+        )
+
         self.tabs.addTab(tab_history, tr("history"))
 
-        # --- Tab 2: ClosedTabsFinder
+        # ── Tab 2: Closed Tabs Finder ───────────────────────────────────────────
         tab_closed = QWidget()
         tab_closed_layout = QVBoxLayout(tab_closed)
 
-        # Date range for closed tabs finder
         tg_section = QWidget()
         tg_form = QFormLayout(tg_section)
         tg_form.setContentsMargins(0, 10, 0, 0)
 
-        # Date range for tab groups
         tg_row = QWidget()
         tg_row_l = QHBoxLayout(tg_row)
         tg_row_l.setContentsMargins(0, 0, 0, 0)
+
         self.tgDateStart = QDateEdit()
         self.tgDateStart.setCalendarPopup(True)
         self.tgDateEnd = QDateEdit()
         self.tgDateEnd.setCalendarPopup(True)
-        # Default: last 60 days (From: today-60, To: today)
-        from datetime import timedelta
-
         default_end = datetime.now().date()
         default_start = default_end - timedelta(days=60)
         self.tgDateStart.setDate(default_start)
@@ -468,70 +500,61 @@ class MainWindow(QMainWindow):
         tg_row_l.addWidget(QLabel(tr("to")))
         tg_row_l.addWidget(self.tgDateEnd)
 
-        # Cluster detection parameters
-        tg_row_l.addWidget(QLabel("  Min URLs:"))
+        tg_row_l.addWidget(QLabel("  " + tr("min_urls_label")))
         self.tgMinUrls = QSpinBox()
         self.tgMinUrls.setRange(1, 100)
         self.tgMinUrls.setValue(10)
-        self.tgMinUrls.setToolTip("Minimum number of URLs to form a group")
+        self.tgMinUrls.setToolTip(tr("min_urls_label"))
         tg_row_l.addWidget(self.tgMinUrls)
 
-        tg_row_l.addWidget(QLabel("  Window (sec):"))
+        tg_row_l.addWidget(QLabel("  " + tr("window_sec_label")))
         self.tgWindowSeconds = QSpinBox()
         self.tgWindowSeconds.setRange(1, 600)
         self.tgWindowSeconds.setValue(60)
-        self.tgWindowSeconds.setToolTip("Time window in seconds for clustering")
+        self.tgWindowSeconds.setToolTip(tr("window_sec_label"))
         tg_row_l.addWidget(self.tgWindowSeconds)
-
         tg_row_l.addStretch(1)
 
         tg_form.addRow(tr("tab_groups"), tg_row)
 
-        # Second row: deduplication and sorting options
         tg_options_row = QWidget()
         tg_options_l = QHBoxLayout(tg_options_row)
         tg_options_l.setContentsMargins(0, 0, 0, 0)
 
-        self.tgDeduplicate = QCheckBox("Deduplicate URLs")
+        self.tgDeduplicate = QCheckBox(tr("deduplicate"))
         self.tgDeduplicate.setChecked(True)
         tg_options_l.addWidget(self.tgDeduplicate)
 
-        tg_options_l.addWidget(QLabel("  Sort by:"))
+        tg_options_l.addWidget(QLabel("  " + tr("sort_by")))
         self.tgSortBy = QComboBox()
-        self.tgSortBy.addItem("Date/Time (default)")
-        self.tgSortBy.addItem("Alphabetical")
+        self.tgSortBy.addItem(tr("sort_datetime"))  # index _SORT_DATETIME = 0
+        self.tgSortBy.addItem(tr("sort_alpha"))  # index _SORT_ALPHA    = 1
         tg_options_l.addWidget(self.tgSortBy)
-
         tg_options_l.addStretch(1)
 
         tg_form.addRow("", tg_options_row)
-
-        # Add the form to the layout
         tab_closed_layout.addWidget(tg_section)
 
-        # Results area for tab groups - using QTreeWidget for collapsible groups
         self.tgResults = QTreeWidget()
-        self.tgResults.setHeaderLabels(["Tab Groups (click to expand)"])
+        self.tgResults.setHeaderLabels([tr("tab_groups_header")])
         self.tgResults.setAlternatingRowColors(True)
+        self.tgResults.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tgResults.customContextMenuRequested.connect(self.on_tg_context_menu)
         tab_closed_layout.addWidget(self.tgResults, 1)
 
-        # Add ClosedTabsFinder tab
         self.tabs.addTab(tab_closed, tr("ClosedTabsFinder"))
-
-        # Auto-refresh ClosedTabsFinder when tab is opened
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
-        # wire
-        # debounce auto-refresh for history search
+        # ── Timers ──────────────────────────────────────────────────────────────
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.timeout.connect(self.on_search)
 
-        # debounce auto-refresh for tab groups
         self._tg_refresh_timer = QTimer(self)
         self._tg_refresh_timer.setSingleShot(True)
         self._tg_refresh_timer.timeout.connect(self.on_find_tab_groups)
 
+        # ── Wiring ──────────────────────────────────────────────────────────────
         self.excludeAdd.clicked.connect(self.on_add_exclude)
         self.excludeInput.returnPressed.connect(self.on_add_exclude)
         self.excludeRemove.clicked.connect(self.on_remove_exclude)
@@ -540,7 +563,6 @@ class MainWindow(QMainWindow):
         )
         self.searchBtn.clicked.connect(self.on_search)
 
-        # Connect tab group controls to auto-refresh
         self.tgDateStart.dateChanged.connect(lambda _d: self._schedule_tg_refresh())
         self.tgDateEnd.dateChanged.connect(lambda _d: self._schedule_tg_refresh())
         self.tgMinUrls.valueChanged.connect(lambda _v: self._schedule_tg_refresh())
@@ -552,29 +574,29 @@ class MainWindow(QMainWindow):
             lambda _i: self._schedule_tg_refresh()
         )
 
-        # status bar (must exist before _update_status)
+        self.table.itemDoubleClicked.connect(self.on_double_click)
+        self.table.customContextMenuRequested.connect(self.on_table_context_menu)
+
+        # ── Status bar ──────────────────────────────────────────────────────────
         self.status = QStatusBar()
         self.setStatusBar(self.status)
         self.status.showMessage(tr("ready"))
 
-        # persistent settings
+        # ── Persistent settings ─────────────────────────────────────────────────
         self._qsettings = QSettings("tradm", "EdgeHistoryFinder")
 
-        # menu
-        mb = self.menuBar()
-        help_menu = mb.addMenu("Hilfe" if _LANG == "de" else "Help")
-        act_about = QAction("Info" if _LANG == "de" else "About", self)
+        # ── Menu ────────────────────────────────────────────────────────────────
+        help_menu = self.menuBar().addMenu(tr("help_menu"))
+        act_about = QAction(tr("about_action"), self)
         act_about.triggered.connect(lambda: _show_about_dialog(self, self._qsettings))
         help_menu.addAction(act_about)
 
         self._load_settings()
         self._update_status()
-        self.table.itemDoubleClicked.connect(self.on_double_click)
-        self.table.customContextMenuRequested.connect(self.on_table_context_menu)
 
-        # status bar (initialized earlier)
+    # ── Helpers ─────────────────────────────────────────────────────────────────
 
-    def excludes(self) -> List[str]:
+    def excludes(self) -> list[str]:
         return [
             self.excludeList.item(i).text().strip()
             for i in range(self.excludeList.count())
@@ -582,25 +604,22 @@ class MainWindow(QMainWindow):
         ]
 
     def _schedule_refresh(self):
-        # Debounced auto-refresh to avoid hammering SQLite while typing/clicking.
         self._refresh_timer.start(250)
 
     def _schedule_tg_refresh(self):
-        # Debounced auto-refresh for tab groups to avoid hammering SQLite while adjusting parameters.
         self._tg_refresh_timer.start(250)
 
     def _on_tab_changed(self, index: int):
-        # When ClosedTabsFinder tab (index 1) is opened, auto-run the search
         if index == 1:
             self.on_find_tab_groups()
+
+    # ── Exclude list ─────────────────────────────────────────────────────────────
 
     def on_add_exclude(self):
         t = self.excludeInput.text().strip()
         if not t:
             return
-        # avoid dups
-        existing = set(self.excludes())
-        if t not in existing:
+        if t not in set(self.excludes()):
             self.excludeList.addItem(t)
         self.excludeInput.clear()
         self._update_status()
@@ -609,8 +628,7 @@ class MainWindow(QMainWindow):
 
     def on_remove_exclude(self):
         for it in self.excludeList.selectedItems():
-            row = self.excludeList.row(it)
-            self.excludeList.takeItem(row)
+            self.excludeList.takeItem(self.excludeList.row(it))
         self._update_status()
         self._save_settings()
         self._schedule_refresh()
@@ -635,49 +653,35 @@ class MainWindow(QMainWindow):
 
         act_clear.triggered.connect(_clear_all)
         menu.addAction(act_clear)
-
         menu.exec(self.excludeList.viewport().mapToGlobal(pos))
 
-    # selection changed: nothing to do (copy happens via context menu / double-click)
-    def on_sel_changed(self):
-        return
+    # ── Table helpers ────────────────────────────────────────────────────────────
 
-    def _selected_urls(self) -> List[str]:
+    def _selected_urls(self) -> list[str]:
         rows = sorted({it.row() for it in self.table.selectedItems()})
-        out: List[str] = []
+        out: list[str] = []
         for r in rows:
             it = self.table.item(r, 4)
-            if not it:
-                continue
-            u = it.text().strip()
-            if u:
-                out.append(u)
+            if it:
+                u = it.text().strip()
+                if u:
+                    out.append(u)
         return out
-
-    def _current_url(self) -> str | None:
-        urls = self._selected_urls()
-        return urls[0] if urls else None
 
     def on_copy(self):
         urls = self._selected_urls()
-        if not urls:
-            return
-        # If multiple rows selected, copy as newline-separated list.
-        QGuiApplication.clipboard().setText("\n".join(urls))
+        if urls:
+            QGuiApplication.clipboard().setText("\n".join(urls))
 
     def on_double_click(self, _item):
-        # Doppelklick = URL kopieren
         self.on_copy()
 
     def _add_exclude_value(self, value: str):
         value = value.strip()
-        if not value:
-            return
-        existing = set(self.excludes())
-        if value not in existing:
+        if value and value not in set(self.excludes()):
             self.excludeList.addItem(value)
 
-    def _add_exclude_values(self, values: List[str]):
+    def _add_exclude_values(self, values: list[str]):
         for v in values:
             self._add_exclude_value(v)
 
@@ -692,36 +696,28 @@ class MainWindow(QMainWindow):
         act_copy.triggered.connect(self.on_copy)
         menu.addAction(act_copy)
 
-        # Exclude domains of selected
-        hosts: List[str] = []
-        for u in urls:
-            try:
-                host = urlparse(u).netloc
-            except Exception:
-                host = ""
-            if host:
-                hosts.append(host)
-        hosts = sorted(set(hosts))
+        hosts: list[str] = sorted(
+            {urlparse(u).netloc for u in urls if urlparse(u).netloc}
+        )
         if hosts:
             label = (
                 tr("exclude_domain")
                 if len(hosts) == 1
                 else tr("exclude_domains", n=len(hosts))
             )
-            act_ex_domains = QAction(label, self)
-            act_ex_domains.triggered.connect(lambda: self._add_exclude_values(hosts))
-            menu.addAction(act_ex_domains)
+            act_ex = QAction(label, self)
+            act_ex.triggered.connect(lambda: self._add_exclude_values(hosts))
+            menu.addAction(act_ex)
 
-        # Exclude URL prefixes of selected
-        prefixes: List[str] = []
+        prefixes: list[str] = []
         for u in urls:
             try:
                 p = urlparse(u)
                 prefix = f"{p.scheme}://{p.netloc}{p.path}"
+                if prefix:
+                    prefixes.append(prefix)
             except Exception:
-                prefix = ""
-            if prefix:
-                prefixes.append(prefix)
+                pass
         prefixes = sorted(set(prefixes))
         if prefixes:
             label = (
@@ -729,28 +725,29 @@ class MainWindow(QMainWindow):
                 if len(prefixes) == 1
                 else tr("exclude_prefixes", n=len(prefixes))
             )
-            act_ex_prefixes = QAction(label, self)
-            act_ex_prefixes.triggered.connect(
-                lambda: self._add_exclude_values(prefixes)
-            )
-            menu.addAction(act_ex_prefixes)
+            act_ep = QAction(label, self)
+            act_ep.triggered.connect(lambda: self._add_exclude_values(prefixes))
+            menu.addAction(act_ep)
 
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
+    # ── Status bar ───────────────────────────────────────────────────────────────
+
     def _update_status(self, result_count: int | None = None):
         typed = "typed-only" if self.typedOnly.isChecked() else "all-visits"
-        ex_n = self.excludeList.count()
-        prof = self.profile.currentText() or "Default"
-        # if result_count is None, keep last known
         if result_count is not None:
             self._last_result_count = result_count
-        rc = getattr(self, "_last_result_count", 0)
         self.status.showMessage(
-            f"Profile: {prof} | Mode: {typed} | Excludes: {ex_n} | Results: {rc}"
+            f"Profile: {self.profile.currentText() or 'Default'}"
+            f" | Mode: {typed}"
+            f" | Excludes: {self.excludeList.count()}"
+            f" | Results: {self._last_result_count}"
         )
 
+    # ── History search ───────────────────────────────────────────────────────────
+
     def on_search(self):
-        user_data = windows_edge_user_data_dir()
+        user_data = self._user_data_dir
         if user_data is None:
             QMessageBox.warning(self, tr("edge_not_found"), tr("edge_not_found_msg"))
             return
@@ -762,33 +759,31 @@ class MainWindow(QMainWindow):
             )
             return
 
-        ds = self.dateStart.date().toPython()
-        de = self.dateEnd.date().toPython()
-        ts = self.timeStart.time().toPython()
-        te = self.timeEnd.time().toPython()
-
-        start_dt = datetime.combine(ds, ts)
-        end_dt = datetime.combine(de, te)
+        start_dt = datetime.combine(
+            self.dateStart.date().toPython(), self.timeStart.time().toPython()
+        )
+        end_dt = datetime.combine(
+            self.dateEnd.date().toPython(), self.timeEnd.time().toPython()
+        )
         if end_dt < start_dt:
             QMessageBox.warning(self, tr("invalid_range"), tr("invalid_range_msg"))
             return
 
         # SQLite weekday mapping: 0=Sun..6=Sat
-        weekdays: List[int] = []
-        if self.wd_sun.isChecked():
-            weekdays.append(0)
-        if self.wd_mon.isChecked():
-            weekdays.append(1)
-        if self.wd_tue.isChecked():
-            weekdays.append(2)
-        if self.wd_wed.isChecked():
-            weekdays.append(3)
-        if self.wd_thu.isChecked():
-            weekdays.append(4)
-        if self.wd_fri.isChecked():
-            weekdays.append(5)
-        if self.wd_sat.isChecked():
-            weekdays.append(6)
+        weekdays: list[int] = []
+        for bit, cb in enumerate(
+            [
+                self.wd_sun,
+                self.wd_mon,
+                self.wd_tue,
+                self.wd_wed,
+                self.wd_thu,
+                self.wd_fri,
+                self.wd_sat,
+            ]
+        ):
+            if cb.isChecked():
+                weekdays.append(bit)
 
         try:
             rows = query_history(
@@ -804,40 +799,45 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, tr("query_failed"), str(e))
             return
 
-        self.table.setRowCount(0)
-        for r in rows:
-            row_i = self.table.rowCount()
-            self.table.insertRow(row_i)
-            self.table.setItem(row_i, 0, QTableWidgetItem(r.local_time))
+        # Batch all row inserts in one repaint cycle for performance
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(0)
+            for r in rows:
+                row_i = self.table.rowCount()
+                self.table.insertRow(row_i)
+                self.table.setItem(row_i, 0, QTableWidgetItem(r.local_time))
 
-            domain = ""
-            gq = ""
-            try:
-                u = urlparse(r.url)
-                domain = u.netloc
-                if u.netloc.endswith("google.com") or u.netloc.endswith("google.at"):
-                    if u.path.startswith("/search"):
-                        from urllib.parse import parse_qs
-
-                        qs = parse_qs(u.query)
-                        qv = qs.get("q")
+                domain = ""
+                gq = ""
+                try:
+                    u = urlparse(r.url)
+                    domain = u.netloc
+                    # Match any Google TLD: google.com, google.de, google.co.uk, etc.
+                    if u.path.startswith("/search") and (
+                        ".google." in u.netloc or u.netloc.startswith("google.")
+                    ):
+                        qv = parse_qs(u.query).get("q")
                         if qv:
                             gq = qv[0]
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
-            self.table.setItem(row_i, 1, QTableWidgetItem(domain))
-            self.table.setItem(row_i, 2, QTableWidgetItem(gq))
-            self.table.setItem(row_i, 3, QTableWidgetItem(r.title))
-            self.table.setItem(row_i, 4, QTableWidgetItem(r.url))
+                self.table.setItem(row_i, 1, QTableWidgetItem(domain))
+                self.table.setItem(row_i, 2, QTableWidgetItem(gq))
+                self.table.setItem(row_i, 3, QTableWidgetItem(r.title))
+                self.table.setItem(row_i, 4, QTableWidgetItem(r.url))
+        finally:
+            self.table.setUpdatesEnabled(True)
 
         if rows:
             self.table.selectRow(0)
-
         self._update_status(result_count=len(rows))
 
+    # ── Closed Tabs Finder ───────────────────────────────────────────────────────
+
     def on_find_tab_groups(self):
-        user_data = windows_edge_user_data_dir()
+        user_data = self._user_data_dir
         if user_data is None:
             QMessageBox.warning(self, tr("edge_not_found"), tr("edge_not_found_msg"))
             return
@@ -853,7 +853,6 @@ class MainWindow(QMainWindow):
         de = self.tgDateEnd.date().toPython()
         start_dt = datetime.combine(ds, datetime.min.time())
         end_dt = datetime.combine(de, datetime.max.time())
-
         if end_dt < start_dt:
             QMessageBox.warning(self, tr("invalid_range"), tr("invalid_range_msg"))
             return
@@ -870,33 +869,26 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, tr("query_failed"), str(e))
             return
 
-        # Clear previous results
         self.tgResults.clear()
 
         if not groups:
-            no_results = QTreeWidgetItem(["No tab groups found"])
-            self.tgResults.addTopLevelItem(no_results)
+            self.tgResults.addTopLevelItem(QTreeWidgetItem([tr("no_tab_groups")]))
             return
 
-        # Display each group as collapsible tree item
         deduplicate = self.tgDeduplicate.isChecked()
-        sort_alphabetically = self.tgSortBy.currentIndex() == 1
+        sort_alphabetically = self.tgSortBy.currentIndex() == _SORT_ALPHA
 
         for group in groups:
             urls = group.urls
             total_count = len(urls)
 
-            # Apply deduplication if enabled
             if deduplicate:
-                urls = list(dict.fromkeys(urls))  # Preserve order while deduplicating
-
+                urls = list(dict.fromkeys(urls))
             deduped_count = len(urls)
 
-            # Apply sorting if alphabetical is selected
             if sort_alphabetically:
                 urls = sorted(urls)
 
-            # Header: timestamp + count (parent item)
             if deduplicate:
                 header_text = f"{group.timestamp} — {deduped_count}/{total_count} URLs"
             else:
@@ -905,80 +897,86 @@ class MainWindow(QMainWindow):
                 )
 
             parent_item = QTreeWidgetItem([header_text])
-            parent_item.setFont(0, QFont("", -1, QFont.Bold))
+            parent_item.setFont(0, QFont("", -1, QFont.Weight.Bold))
 
-            # Add URLs as children
             for url in urls:
-                child_item = QTreeWidgetItem([url])
-                child_item.setForeground(0, QColor("#0066cc"))
-                parent_item.addChild(child_item)
+                child = QTreeWidgetItem([url])
+                child.setForeground(0, QColor("#0066cc"))
+                parent_item.addChild(child)
 
-            # Add parent to tree
             self.tgResults.addTopLevelItem(parent_item)
-
-            # Collapse by default
             parent_item.setExpanded(False)
+
+    def on_tg_context_menu(self, pos):
+        item = self.tgResults.itemAt(pos)
+        if not item or item.parent() is None:
+            return
+        url = item.text(0).strip()
+        if not url:
+            return
+        menu = QMenu(self)
+        act_copy = QAction(tr("copy_url"), self)
+        act_copy.triggered.connect(lambda: QGuiApplication.clipboard().setText(url))
+        menu.addAction(act_copy)
+        menu.exec(self.tgResults.viewport().mapToGlobal(pos))
 
 
 def _show_about_dialog(parent, qsettings: QSettings) -> None:
-    # About dialog with optional "don't show splash again".
     dlg = QDialog(parent)
     dlg.setWindowTitle(tr("title"))
     dlg.setModal(True)
-
     lay = QVBoxLayout(dlg)
 
-    title = QLabel(tr("title"))
-    title.setStyleSheet("font-size: 18px; font-weight: 700;")
-    lay.addWidget(title)
+    title_lbl = QLabel(tr("title"))
+    title_lbl.setStyleSheet("font-size: 18px; font-weight: 700;")
+    lay.addWidget(title_lbl)
 
-    version_label = QLabel("Version 0.9.0")
-    version_label.setStyleSheet("color: #666; font-size: 11px;")
-    lay.addWidget(version_label)
+    try:
+        _version = pkg_version("edge-history-finder")
+    except Exception:
+        _version = "dev"
+    version_lbl = QLabel(f"Version {_version}")
+    version_lbl.setStyleSheet("color: #666; font-size: 11px;")
+    lay.addWidget(version_lbl)
 
     lay.addWidget(
         QLabel(
-            "System design and intent by Thomas Radman · Code generated by OpenClaw & opencode using OpenAI GPT 5.2 Codex & Anthropic Sonnet 4.5"
+            "System design and intent by Thomas Radman · "
+            "Code generated by OpenClaw & opencode using OpenAI GPT 5.2 Codex & Anthropic Sonnet 4.5"
         )
     )
-
-    # Add spacing
     lay.addSpacing(10)
 
-    # Feature descriptions
     features_title = QLabel("Features:")
     features_title.setStyleSheet("font-weight: bold;")
     lay.addWidget(features_title)
 
-    history_desc = QLabel(
+    for text in [
         "• <b>History Search:</b> Find lost URLs by time window, exclude common sites,\n"
-        "  filter by weekday, and search only typed URLs."
-    )
-    history_desc.setStyleSheet("color: #333;")
-    lay.addWidget(history_desc)
-
-    closed_tabs_desc = QLabel(
+        "  filter by weekday, and search only typed URLs.",
         "• <b>Closed Tabs Finder:</b> Recover groups of tabs closed together.\n"
-        "  Detects tab groups by clustering URLs visited within seconds."
-    )
-    closed_tabs_desc.setStyleSheet("color: #333;")
-    lay.addWidget(closed_tabs_desc)
+        "  Detects tab groups by clustering URLs visited within seconds.",
+    ]:
+        lbl = QLabel(text)
+        lbl.setStyleSheet("color: #333;")
+        lay.addWidget(lbl)
 
     lay.addSpacing(10)
 
     tip = QLabel(
-        "Tip: Right-click results to copy / exclude domains.\nPrivacy: runs locally, reads Edge History SQLite via temp copy."
+        "Tip: Right-click results to copy / exclude domains.\n"
+        "Privacy: runs locally, reads Edge History SQLite via temp copy."
     )
     tip.setStyleSheet("color: #555;")
     lay.addWidget(tip)
 
-    # GitHub link
-    github_link = QLabel(
-        '<a href="https://github.com/tradmangh/edge-history-finder/issues/new/choose">Report bugs or request features on GitHub</a>'
+    gh = QLabel(
+        '<a href="https://github.com/tradmangh/edge-history-finder/issues/new/choose">'
+        "Report bugs or request features on GitHub</a>"
     )
-    github_link.setOpenExternalLinks(True)
-    github_link.setStyleSheet("color: #0066cc;")
-    lay.addWidget(github_link)
+    gh.setOpenExternalLinks(True)
+    gh.setStyleSheet("color: #0066cc;")
+    lay.addWidget(gh)
 
     cb = QCheckBox(tr("dont_show_again"))
     cb.setChecked(not bool(qsettings.value("showSplash", True)))
@@ -992,14 +990,12 @@ def _show_about_dialog(parent, qsettings: QSettings) -> None:
 
     bb.accepted.connect(_accept)
     lay.addWidget(bb)
-
     dlg.exec()
 
 
 def main() -> int:
     app = QApplication(sys.argv)
 
-    # Show about dialog on first run unless disabled.
     qs = QSettings("tradm", "EdgeHistoryFinder")
     show = qs.value("showSplash", True)
     if isinstance(show, str):
@@ -1009,7 +1005,6 @@ def main() -> int:
     if bool(show):
         _show_about_dialog(w, qs)
     w.show()
-
     return app.exec()
 
 
