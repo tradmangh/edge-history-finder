@@ -938,9 +938,19 @@ class MainWindow(QMainWindow):
         self.hmTable.verticalHeader().setDefaultSectionSize(_CELL)
         self.hmTable.verticalHeader().setMinimumSectionSize(_CELL)
         self.hmTable.verticalHeader().setMaximumWidth(28)
-        self.hmTable.setFixedHeight(7 * (_CELL + 1) + 30)
+        self.hmTable.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         for i, label in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
             self.hmTable.setVerticalHeaderItem(i, QTableWidgetItem(label))
+        heatmap_height = (
+            self.hmTable.horizontalHeader().height()
+            + (
+                self.hmTable.rowCount()
+                * self.hmTable.verticalHeader().defaultSectionSize()
+            )
+            + (self.hmTable.frameWidth() * 2)
+            + 8
+        )
+        self.hmTable.setFixedHeight(heatmap_height)
         self.hmTable.cellClicked.connect(self._on_heatmap_click)
         tab_layout.addWidget(self.hmTable)
 
@@ -1677,6 +1687,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, tr("query_failed"), str(e))
             return
 
+        sorting_enabled = self.stTable.isSortingEnabled()
+        self.stTable.setSortingEnabled(False)
         self.stTable.setUpdatesEnabled(False)
         try:
             self.stTable.setRowCount(0)
@@ -1700,6 +1712,7 @@ class MainWindow(QMainWindow):
                 self.stTable.setItem(row_i, 4, _table_item(s.last_visit))
         finally:
             self.stTable.setUpdatesEnabled(True)
+            self.stTable.setSortingEnabled(sorting_enabled)
 
         self.status.showMessage(f"Stats: {len(stats)} domains")
 
